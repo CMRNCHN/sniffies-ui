@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Sniffies Intent Bar (iPhone) — Harness</title>
+  <meta name="sniffies-iphone-harness" content="1" />
   <style>
     body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #0b0f14; color: #e6edf3; }
     #fixture { min-height: 55vh; padding: 16px; padding-bottom: 220px; }
@@ -52,6 +53,9 @@
         <app-chat-list style="display:block;width:320px;height:400px">
           <button data-testid="chatListTab-recents">Recents</button>
           <button data-testid="chatListTab-screened">Screened</button>
+          <button data-testid="chatListTab-pinned">Pinned</button>
+          <button data-testid="chatListTab-favorites">Favorites</button>
+          <button data-testid="chatListTab-places">Places</button>
           <div data-testid="sniffiesChatRow" style="display:block;width:280px;height:48px">User A — hey</div>
           <div data-testid="sniffiesChatRow" style="display:block;width:280px;height:48px">User B — wyd</div>
         </app-chat-list>`;
@@ -126,8 +130,10 @@
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "MAP", "MAP detected"));
       log(assert(document.getElementById("sniffies-iphone-bar")?.dataset.view === "MAP", "bar shows MAP"));
-      log(assert(!![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent === "Chats"), "MAP has Chats"));
-      log(assert(!![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent === "Pinned"), "MAP has Pinned"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="chats"]'), "MAP has Chats icon"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="pinned"]'), "MAP has Pinned icon"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="favorites"]'), "MAP has Favorites icon"));
+      log(assert(!document.querySelector('#sniffies-iphone-bar [data-cmd="saved"]'), "no Places/Saved cmd"));
       log(assert(![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent.match(/^Split/)), "no Split nav button"));
 
       sceneChats();
@@ -140,18 +146,22 @@
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "PROFILE", "PROFILE detected"));
-      log(assert(!![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent === "Chat" && b.style.display !== "none"), "PROFILE shows Chat"));
+      const msgBtn = document.querySelector('#sniffies-iphone-bar [data-cmd="chat"]');
+      log(assert(!!msgBtn && msgBtn.style.display !== "none", "PROFILE shows Message icon"));
+      log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
 
       sceneChat();
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "CHAT", "CHAT via chatInputPanel"));
       log(assert(!!document.getElementById("sniffies-iphone-composer"), "quick composer mounts"));
+      const sendNav = document.querySelector('#sniffies-iphone-bar [data-cmd="send"]');
+      log(assert(!!sendNav && sendNav.style.display !== "none", "CHAT shows Send icon in nav"));
       log(assert(!!api.getChatTextArea(), "chat textarea found"));
       log(assert(!!api.getSendButton(), "send button found"));
 
       const ok = api.insertAndSendMessage("Harness ping");
-      await wait(50);
+      await wait(250);
       const sendBtn = document.querySelector('[data-testid="sendButton"]');
       log(assert(ok === true, "insertAndSendMessage returns true"));
       log(assert(sendBtn.dataset.lastSent === "Harness ping", "send button received text"));
