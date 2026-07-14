@@ -72,6 +72,20 @@
         </app-profile>`;
     }
 
+    function sceneProfileCompose() {
+      clearFixture();
+      fixture.innerHTML = `
+        <app-profile style="display:block;width:360px;height:520px">
+          <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
+          <button aria-label="Favorite">Favorite</button>
+          <button aria-label="Back">Back</button>
+          <div id="chat-input-panel" data-testid="chatInputPanel" class="chat-input-panel" style="display:block;width:340px;height:100px">
+            <textarea name="chatTextArea" data-testid="chatTextArea" placeholder="Message..."></textarea>
+            <button type="button" data-testid="sendButton">Send</button>
+          </div>
+        </app-profile>`;
+    }
+
     function sceneChat() {
       clearFixture();
       fixture.innerHTML = `
@@ -149,6 +163,18 @@
       const msgBtn = document.querySelector('#sniffies-iphone-bar [data-cmd="chat"]');
       log(assert(!!msgBtn && msgBtn.style.display !== "none", "PROFILE shows Message icon"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
+
+      sceneProfileCompose();
+      await wait(120);
+      api.renderBar(api.resolveViewState());
+      log(assert(api.resolveViewState() === "PROFILE", "profile+composer is PROFILE not CHAT"));
+      log(assert(document.documentElement.getAttribute("data-sniffies-view") === "PROFILE", "html view attr PROFILE"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="chat"]') &&
+        document.querySelector('#sniffies-iphone-bar [data-cmd="chat"]').style.display !== "none", "profile+composer shows Message"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="send"]') &&
+        document.querySelector('#sniffies-iphone-bar [data-cmd="send"]').style.display !== "none", "profile+composer shows Send"));
+      log(assert(!document.getElementById("sniffies-iphone-composer") ||
+        document.getElementById("sniffies-iphone-composer").style.display === "none", "no composer takeover on profile"));
 
       sceneChat();
       await wait(120);

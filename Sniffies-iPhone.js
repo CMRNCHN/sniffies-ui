@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.4
+// @version      1.0.5
 // @description  Mobile nav + quick message bar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.0.4";
+  var VERSION = "1.0.5";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -356,18 +356,18 @@
   }
 
   function isChatThreadOpen() {
+    // Profile pages embed a Message composer — that is NOT a private chat thread.
+    if (findProfileHost()) return false;
     if (findChatComposerPanel()) return true;
     if (getNativeChatTextArea()) return true;
     var t = titleHint();
-    return (
-      t.indexOf("private chat") !== -1 ||
-      (t.indexOf("cruiser profile") !== -1 && !!qs(SEL.chatInputPanel))
-    );
+    return t.indexOf("private chat") !== -1;
   }
 
   function resolveViewState() {
-    if (isChatThreadOpen()) return "CHAT";
+    // Profile must win over CHAT: cruiser profiles include chatInputPanel / textarea.
     if (findProfileHost()) return "PROFILE";
+    if (isChatThreadOpen()) return "CHAT";
     if (isChatListOpen()) return "CHATS_LIST";
     return "MAP";
   }
@@ -660,12 +660,20 @@
       "html.sniffies-iphone-has-bar [class*='profile-detail']," +
       "html.sniffies-iphone-has-bar [class*='profileDetail']," +
       "html.sniffies-iphone-has-bar [class*='ProfileContainer'] {" +
-      "  padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 20px) !important;" +
-      "  scroll-padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 20px) !important;" +
+      "  padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 24px) !important;" +
+      "  scroll-padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 24px) !important;" +
       "  box-sizing: border-box !important;" +
       "}" +
       "html.sniffies-iphone-has-bar app-profile {" +
       "  max-height: none !important;" +
+      "}" +
+      /* Keep the profile's native Message row above our icon bar */ +
+      "html[data-sniffies-view='PROFILE'] [data-testid='chatInputPanel']," +
+      "html[data-sniffies-view='PROFILE'] #chat-input-panel," +
+      "html[data-sniffies-view='PROFILE'] app-chat-input {" +
+      "  margin-bottom: calc(var(--sniffies-iphone-bar-h, 56px) + 10px) !important;" +
+      "  position: relative !important;" +
+      "  z-index: 1000012 !important;" +
       "}";
     document.head.appendChild(style);
   }
@@ -698,14 +706,17 @@
   }
 
   function getActiveChatFingerprint() {
-    if (!isChatThreadOpen()) return null;
     var input = getNativeChatTextArea();
     var sendBtn = getNativeSendButton();
     if (!input || !sendBtn) return null;
+    // Private threads OR profile inline Message box (compose-on-profile)
+    if (!isChatThreadOpen() && !findProfileHost()) return null;
     var header =
       firstVisible(
         '[data-testid*="chatHeader"], [data-testid*="conversationHeader"], app-chat-header, .chat-header'
-      ) || firstVisible(SEL.chatInputPanel);
+      ) ||
+      findProfileHost() ||
+      firstVisible(SEL.chatInputPanel);
     var title = stripControls((header && header.textContent) || "")
       .replace(/\s+/g, " ")
       .trim()
@@ -714,7 +725,8 @@
       input: input,
       sendBtn: sendBtn,
       title: title,
-      path: location.pathname || ""
+      path: location.pathname || "",
+      profile: !!findProfileHost()
     };
   }
 
@@ -1159,9 +1171,25 @@
   }
 
   function cmdStartChat() {
+    // Profile already has an inline Message box — focus it instead of hunting a covered button.
+    if (findProfileHost()) {
+      var native = getNativeChatTextArea();
+      if (native) {
+        try {
+          native.scrollIntoView({ block: "center", behavior: "smooth" });
+        } catch (e) {}
+        native.focus();
+        showToast("Message", "success");
+        return;
+      }
+    }
     var btn = getProfileChatButton();
-    if (btn) btn.click();
-    else showToast("Chat button not found", "error");
+    if (btn) {
+      try {
+        btn.scrollIntoView({ block: "center", behavior: "smooth" });
+      } catch (e2) {}
+      btn.click();
+    } else showToast("Chat button not found", "error");
   }
 
   function getFavoriteButton() {
@@ -1212,15 +1240,34 @@
 
   function cmdComposerSend() {
     var ta = getComposerTextarea();
-    if (!ta) return;
-    var val = (ta.value || "").trim();
-    if (!val) return;
+    var val = ta ? stripControls(ta.value || "").trim() : "";
+    if (!val) {
+      var native = getNativeChatTextArea();
+      if (!native) {
+        showToast("Nothing to send", "error");
+        return;
+      }
+      val = stripControls(
+        native.isContentEditable ? native.textContent || "" : native.value || ""
+      ).trim();
+      if (!val) {
+        try {
+          native.focus();
+        } catch (e) {}
+        showToast("Type a message first", "error");
+        return;
+      }
+      if (sendViaNative(val)) showToast("Sent", "success");
+      return;
+    }
     if (sendViaNative(val)) {
       ta.value = "";
+      ta.style.height = "40px";
+      ta.dispatchEvent(new Event("input", { bubbles: true }));
       showToast("Sent", "success");
       setTimeout(function () {
         refreshAiSuggestions(function () {
-          renderComposer(resolveViewState());
+          if (resolveViewState() === "CHAT") renderComposer("CHAT");
         });
       }, 400);
     }
@@ -1353,7 +1400,8 @@
   }
 
   function renderComposer(state) {
-    var inChat = state === "CHAT" || isChatThreadOpen();
+    // Never take over the profile's native Message row — only full chat threads.
+    var inChat = state === "CHAT" && isChatThreadOpen();
     if (!inChat) {
       hideComposer();
       return;
@@ -1795,6 +1843,7 @@
       ensureHideNativeStyle();
       var bar = ensureBar();
       bar.setAttribute("data-view", state || "MAP");
+      document.documentElement.setAttribute("data-sniffies-view", state || "MAP");
 
       var btns = {};
       qsa("[data-cmd]", bar).forEach(function (b) {
@@ -1808,15 +1857,17 @@
       setBtnTone(btns.back, false, THEME.textMute);
       setBtnTone(btns.settings, false, THEME.textDim);
 
-      // Message = start chat on profile (replaces covered native Message button)
+      // Message = start/focus chat on profile (native Message is often under our bar)
       if (btns.chat) {
         btns.chat.style.display = state === "PROFILE" ? "" : "none";
         setBtnTone(btns.chat, state === "PROFILE", THEME.accent);
       }
-      // Send = composer send while in a thread
+      // Send = bridge to native send in threads; also on profile when compose box exists
       if (btns.send) {
-        btns.send.style.display = state === "CHAT" ? "" : "none";
-        setBtnTone(btns.send, state === "CHAT", THEME.green);
+        var showSend =
+          state === "CHAT" || (state === "PROFILE" && !!getNativeChatTextArea());
+        btns.send.style.display = showSend ? "" : "none";
+        setBtnTone(btns.send, showSend, THEME.green);
       }
 
       updateContentInset();
