@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Watch Sniffies-iPhone.js → refresh local Tampermonkey mirror + print update reminders.
+# Watch Sniffies-iPhone.js → refresh .user.js + local Tampermonkey mirror.
 #
 # Tampermonkey on iPhone only picks up changes after the file is on GitHub main
-# (@updateURL). This watch loop cannot push for you; it syncs a local mirror and
-# reminds you to bump version + push. Optional Mac Safari reload if testing the
-# same script in desktop Safari with SNIFFIES_IPHONE_RELOAD_MAC=1.
+# (@updateURL → Sniffies-iPhone.user.js). This watch loop cannot push for you;
+# it syncs mirrors and reminds you to bump version + push. Optional Mac Safari
+# reload if testing the same script in desktop Safari with SNIFFIES_IPHONE_RELOAD_MAC=1.
 #
 set -euo pipefail
 
@@ -14,8 +14,8 @@ SYNC="$ROOT/scripts/sync-to-userscripts-iphone.sh"
 RELOAD="$ROOT/scripts/reload-safari-sniffies.sh"
 
 echo "Watching $TARGET"
-echo "On save: refresh Tampermonkey local mirror + print raw update URL"
-echo "Remember: bump // @version and push to main for iPhone Tampermonkey auto-update"
+echo "On save: write Sniffies-iPhone.user.js + local TM mirror"
+echo "Remember: bump // @version and push .js + .user.js to main for iPhone updates"
 if [[ "${SNIFFIES_IPHONE_RELOAD_MAC:-}" == "1" ]]; then
   echo "Also reloading Mac Safari sniffies.com tabs (SNIFFIES_IPHONE_RELOAD_MAC=1)"
 fi
