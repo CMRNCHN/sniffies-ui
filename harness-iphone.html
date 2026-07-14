@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Sniffies Intent Bar (iPhone) — Harness</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, system-ui, sans-serif; background: #0b0f14; color: #e6edf3; }
+    #fixture { min-height: 55vh; padding: 16px; padding-bottom: 220px; }
+    #controls { position: sticky; top: 0; z-index: 10; display: flex; gap: 8px; flex-wrap: wrap; padding: 12px; background: #161b22; border-bottom: 1px solid #21262d; }
+    #controls button { padding: 10px 12px; min-height: 40px; border-radius: 8px; border: 1px solid #30363d; background: #21262d; color: #e6edf3; cursor: pointer; }
+    #results { padding: 12px 16px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; white-space: pre-wrap; }
+    .pass { color: #2ea043; }
+    .fail { color: #da3633; }
+    app-profile, app-chat-list, #chat-input-panel { display: block; margin: 12px 0; padding: 16px; border: 1px solid #30363d; border-radius: 10px; background: #161b22; }
+    textarea { width: 100%; min-height: 48px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; padding: 8px; font-size: 16px; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <button data-scene="map">MAP</button>
+    <button data-scene="chats">CHATS_LIST</button>
+    <button data-scene="profile">PROFILE</button>
+    <button data-scene="chat">CHAT</button>
+    <button id="run-tests">Run tests</button>
+  </div>
+  <div id="fixture"></div>
+  <div id="results"></div>
+
+  <div class="bottom-menu" style="position:fixed;bottom:0;left:0;right:0;height:48px;opacity:0;pointer-events:none">
+    <button data-testid="chatButtonIcon" aria-label="Chat List"></button>
+    <button data-testid="globalChatIcon" class="global-chat-nav"></button>
+  </div>
+
+  <script src="./Sniffies-iPhone.js"></script>
+  <script>
+    const fixture = document.getElementById("fixture");
+    const results = document.getElementById("results");
+
+    function clearFixture() {
+      fixture.innerHTML = "";
+    }
+
+    function sceneMap() {
+      clearFixture();
+      fixture.innerHTML = "<h2>Map</h2><p>Markers only.</p>";
+    }
+
+    function sceneChats() {
+      clearFixture();
+      fixture.innerHTML = `
+        <app-chat-list style="display:block;width:320px;height:400px">
+          <button data-testid="chatListTab-recents">Recents</button>
+          <button data-testid="chatListTab-screened">Screened</button>
+          <div data-testid="sniffiesChatRow" style="display:block;width:280px;height:48px">User A — hey</div>
+          <div data-testid="sniffiesChatRow" style="display:block;width:280px;height:48px">User B — wyd</div>
+        </app-chat-list>`;
+    }
+
+    function sceneProfile() {
+      clearFixture();
+      fixture.innerHTML = `
+        <app-profile style="display:block;width:360px;height:480px">
+          <div data-testid="profileHeadlineTableContainer">Cruiser</div>
+          <button aria-label="Message">Message</button>
+          <button aria-label="Favorite">Favorite</button>
+          <button aria-label="Back">Back</button>
+        </app-profile>`;
+    }
+
+    function sceneChat() {
+      clearFixture();
+      fixture.innerHTML = `
+        <div id="chat-input-panel" data-testid="chatInputPanel" class="chat-input-panel" style="display:block;width:420px;height:120px">
+          <form class="chat-input" name="submitChatForm">
+            <textarea name="chatTextArea" data-testid="chatTextArea" placeholder="Message"></textarea>
+            <button type="button" id="chat-input-send-text-or-saved-photo" data-testid="sendButton">Send</button>
+          </form>
+        </div>`;
+      const send = fixture.querySelector('[data-testid="sendButton"]');
+      send.addEventListener("click", () => {
+        const ta = fixture.querySelector("textarea");
+        send.dataset.lastSent = ta.value;
+        ta.value = "";
+        ta.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+    }
+
+    const scenes = { map: sceneMap, chats: sceneChats, profile: sceneProfile, chat: sceneChat };
+    document.querySelectorAll("#controls [data-scene]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        scenes[btn.dataset.scene]();
+        setTimeout(() => {
+          const api = window.__sniffiesIntentBarIPhoneApi || window.__sniffiesIntentBarApi;
+          if (api) api.renderBar(api.resolveViewState());
+        }, 100);
+      });
+    });
+
+    function assert(cond, msg) {
+      return { ok: !!cond, msg };
+    }
+
+    async function wait(ms) {
+      return new Promise((r) => setTimeout(r, ms));
+    }
+
+    async function runTests() {
+      const api = window.__sniffiesIntentBarIPhoneApi || window.__sniffiesIntentBarApi;
+      const lines = [];
+      function log(item) {
+        lines.push((item.ok ? "PASS" : "FAIL") + "  " + item.msg);
+      }
+
+      if (!api) {
+        results.textContent = "FAIL  API not exposed";
+        results.className = "fail";
+        return;
+      }
+
+      log(assert(!document.getElementById("sniffies-split-shell"), "no Split shell"));
+      log(assert(!document.getElementById("sniffies-split-fab"), "no Split FAB"));
+
+      sceneMap();
+      await wait(120);
+      api.renderBar(api.resolveViewState());
+      log(assert(api.resolveViewState() === "MAP", "MAP detected"));
+      log(assert(document.getElementById("sniffies-iphone-bar")?.dataset.view === "MAP", "bar shows MAP"));
+      log(assert(!![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent === "Chats"), "MAP has Chats"));
+      log(assert(!![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent === "Pinned"), "MAP has Pinned"));
+      log(assert(![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent.match(/^Split/)), "no Split nav button"));
+
+      sceneChats();
+      await wait(120);
+      api.renderBar(api.resolveViewState());
+      log(assert(api.resolveViewState() === "CHATS_LIST", "CHATS_LIST via visible rows/tabs"));
+      log(assert(document.getElementById("sniffies-iphone-bar")?.dataset.view === "CHATS_LIST", "bar shows CHATS_LIST"));
+
+      sceneProfile();
+      await wait(120);
+      api.renderBar(api.resolveViewState());
+      log(assert(api.resolveViewState() === "PROFILE", "PROFILE detected"));
+      log(assert(!![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent === "Chat" && b.style.display !== "none"), "PROFILE shows Chat"));
+
+      sceneChat();
+      await wait(120);
+      api.renderBar(api.resolveViewState());
+      log(assert(api.resolveViewState() === "CHAT", "CHAT via chatInputPanel"));
+      log(assert(!!document.getElementById("sniffies-iphone-composer"), "quick composer mounts"));
+      log(assert(!!api.getChatTextArea(), "chat textarea found"));
+      log(assert(!!api.getSendButton(), "send button found"));
+
+      const ok = api.insertAndSendMessage("Harness ping");
+      await wait(50);
+      const sendBtn = document.querySelector('[data-testid="sendButton"]');
+      log(assert(ok === true, "insertAndSendMessage returns true"));
+      log(assert(sendBtn.dataset.lastSent === "Harness ping", "send button received text"));
+
+      sceneChats();
+      const panel = document.createElement("div");
+      panel.id = "chat-input-panel";
+      panel.setAttribute("data-testid", "chatInputPanel");
+      panel.style.cssText = "display:block;width:100px;height:40px";
+      panel.innerHTML = '<textarea name="chatTextArea" data-testid="chatTextArea"></textarea><button data-testid="sendButton">Send</button>';
+      fixture.appendChild(panel);
+      await wait(50);
+      log(assert(api.resolveViewState() === "CHAT", "CHAT wins over CHATS_LIST when composer visible"));
+
+      clearFixture();
+      fixture.innerHTML = '<div data-testid="chat-global-messages-panel" style="display:block;width:200px;height:200px">global</div>';
+      await wait(50);
+      log(assert(api.resolveViewState() === "MAP", "global chat panel alone is not private CHAT"));
+
+      const failed = lines.filter((l) => l.startsWith("FAIL")).length;
+      results.className = failed ? "fail" : "pass";
+      results.textContent = lines.join("\n") + "\n\n" + (failed ? failed + " failed" : "All passed");
+    }
+
+    document.getElementById("run-tests").onclick = runTests;
+    sceneMap();
+    setTimeout(runTests, 200);
+  </script>
+</body>
+</html>
