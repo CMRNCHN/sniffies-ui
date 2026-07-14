@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Cursor afterFileEdit: sync + reload Safari when Sniffies.js is saved
+# Cursor afterFileEdit: sync Mac / iPhone userscripts on save
+# Mac (Safari Userscripts): sync + reload Safari sniffies tabs
+# iPhone (Tampermonkey): refresh local mirror; real device updates need
+#   version bump + push to main (@updateURL GitHub raw)
 set -euo pipefail
 
 input=$(cat)
@@ -27,6 +30,14 @@ print("")
 ' 2>/dev/null || true)
 
 case "$file_path" in
+  *Sniffies-iPhone.js|*Sniffies\ Intent\ Bar\ \(iPhone\)*)
+    ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+    "$ROOT/scripts/sync-to-userscripts-iphone.sh" || true
+    # iPhone Safari cannot be reloaded from Mac; optional Mac-tab refresh for local smoke.
+    if [[ "${SNIFFIES_IPHONE_RELOAD_MAC:-}" == "1" ]]; then
+      "$ROOT/scripts/reload-safari-sniffies.sh" || true
+    fi
+    ;;
   *Sniffies.js|*Sniffies\ Intent\ Bar*)
     ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
     "$ROOT/scripts/sync-to-userscripts.sh" || true
