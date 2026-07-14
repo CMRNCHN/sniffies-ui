@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (Mac)
-// @version      5.2.0
-// @description  Split View that adapts to live Sniffies DOM (map / chat list / thread)
+// @version      6.0.0
+// @description  Four-pane Split shell — Map | Profiles | Active Chat | All Chats
 // @match        https://sniffies.com/*
 // @match        https://www.sniffies.com/*
 // @run-at       document-end
@@ -19,9 +19,16 @@
   var BAR_ID = "sniffies-overlay-bar";
   var COMPOSER_ID = "sniffies-composer";
   var SHELL_ID = "sniffies-split-shell";
-  var LEFT_PANE_ID = "sniffies-left-pane";
-  var MESSENGER_ID = "sniffies-messenger";
-  var PROFILE_PANEL_ID = "sniffies-profile-panel";
+  var RAIL_ID = "sniffies-rail";
+  var MAP_PANE_ID = "sniffies-map-pane";
+  var PROFILES_PANE_ID = "sniffies-profiles-pane";
+  var THREAD_PANE_ID = "sniffies-thread-pane";
+  var CHATS_PANE_ID = "sniffies-chats-pane";
+  var MIDDLE_PANE_ID = "sniffies-middle-pane";
+  // Legacy aliases kept for bridge/compat during 5.x → 6.x
+  var LEFT_PANE_ID = MAP_PANE_ID;
+  var MESSENGER_ID = THREAD_PANE_ID;
+  var PROFILE_PANEL_ID = PROFILES_PANE_ID;
   var MODAL_ID = "sniffies-quick-modal";
   var SETTINGS_ID = "sniffies-settings-modal";
   var TOAST_ID = "sniffies-toast";
@@ -30,6 +37,7 @@
   var PROFILE_SAVE_ID = "sniffies-profile-save-btn";
   var SPLIT_FAB_ID = "sniffies-split-fab";
   var WIDE_BREAKPOINT = 1400;
+  var RAIL_W = 52;
 
   var DEFAULTS = {
     quickMessages: [
@@ -42,7 +50,8 @@
     aiEnabled: true,
     aiEndpoint: "",
     splitEnabled: false,
-    leftMode: "map",
+    railFocus: "map", // map | chats | profiles
+    middleTab: "profiles", // profiles | thread (narrow only)
     notes: {}
   };
 
@@ -89,10 +98,23 @@
 
   var aiSuggestionsCache = [];
   var aiLoading = false;
-  var messengerMode = "chats"; // chats | pinned | saved | notes
+  var messengerMode = "chats"; // chats | pinned | saved | notes (list tab bridge)
+  var chatsFilter = "all"; // all | unread | favorites
+  var chatsSearchQuery = "";
   var lastGridCards = [];
   var shellDirty = true;
   var lastLayoutKey = "";
+  var lastMapRenderKey = "";
+  var lastProfilesRenderKey = "";
+  var lastThreadRenderKey = "";
+  var lastChatsRenderKey = "";
+  var lastRailRenderKey = "";
+  var lastMiddleRenderKey = "";
+  // Legacy keys some call sites still clear
+  var lastLeftRenderKey = "";
+  var lastMessengerKey = "";
+  var lastProfileKey = "";
+  var PANE_FOOTER_H = 48;
 
   // ============================================================
   // STORAGE
@@ -106,7 +128,17 @@
     if (typeof parsed.aiEnabled !== "boolean") parsed.aiEnabled = DEFAULTS.aiEnabled;
     if (typeof parsed.aiEndpoint !== "string") parsed.aiEndpoint = DEFAULTS.aiEndpoint;
     if (typeof parsed.splitEnabled !== "boolean") parsed.splitEnabled = DEFAULTS.splitEnabled;
-    if (parsed.leftMode !== "map" && parsed.leftMode !== "grid") parsed.leftMode = DEFAULTS.leftMode;
+    // Migrate legacy leftMode → railFocus
+    if (!parsed.railFocus) {
+      if (parsed.leftMode === "grid") parsed.railFocus = "profiles";
+      else parsed.railFocus = DEFAULTS.railFocus;
+    }
+    if (parsed.railFocus !== "map" && parsed.railFocus !== "chats" && parsed.railFocus !== "profiles") {
+      parsed.railFocus = DEFAULTS.railFocus;
+    }
+    if (parsed.middleTab !== "profiles" && parsed.middleTab !== "thread") {
+      parsed.middleTab = DEFAULTS.middleTab;
+    }
     if (!parsed.notes || typeof parsed.notes !== "object") parsed.notes = {};
     return parsed;
   }
@@ -156,17 +188,57 @@
     state.splitEnabled = !!on;
     saveState(state);
     shellDirty = true;
+    lastMapRenderKey = "";
+    lastProfilesRenderKey = "";
+    lastThreadRenderKey = "";
+    lastChatsRenderKey = "";
+    lastRailRenderKey = "";
+    lastMiddleRenderKey = "";
+    lastLeftRenderKey = "";
+    lastMessengerKey = "";
+    lastProfileKey = "";
+    lastLayoutKey = "";
   }
 
-  function getLeftMode() {
-    return loadState().leftMode === "grid" ? "grid" : "map";
+  function getRailFocus() {
+    var f = loadState().railFocus;
+    if (f === "chats" || f === "profiles") return f;
+    return "map";
   }
 
-  function setLeftMode(mode) {
+  function setRailFocus(focus) {
     var state = loadState();
-    state.leftMode = mode === "grid" ? "grid" : "map";
+    state.railFocus = focus === "chats" || focus === "profiles" ? focus : "map";
+    if (focus === "profiles") state.middleTab = "profiles";
+    if (focus === "chats") state.middleTab = "thread";
     saveState(state);
     shellDirty = true;
+    lastRailRenderKey = "";
+    lastMiddleRenderKey = "";
+  }
+
+  function getMiddleTab() {
+    return loadState().middleTab === "thread" ? "thread" : "profiles";
+  }
+
+  function setMiddleTab(tab) {
+    var state = loadState();
+    state.middleTab = tab === "thread" ? "thread" : "profiles";
+    saveState(state);
+    shellDirty = true;
+    lastMiddleRenderKey = "";
+    lastProfilesRenderKey = "";
+    lastThreadRenderKey = "";
+  }
+
+  /** @deprecated use getRailFocus — kept for bar/API compat */
+  function getLeftMode() {
+    return getRailFocus() === "profiles" ? "grid" : "map";
+  }
+
+  /** @deprecated use setRailFocus */
+  function setLeftMode(mode) {
+    setRailFocus(mode === "grid" ? "profiles" : "map");
   }
 
   function getNotesMap() {
@@ -248,9 +320,12 @@
       BAR_ID,
       COMPOSER_ID,
       SHELL_ID,
-      LEFT_PANE_ID,
-      MESSENGER_ID,
-      PROFILE_PANEL_ID,
+      RAIL_ID,
+      MAP_PANE_ID,
+      PROFILES_PANE_ID,
+      THREAD_PANE_ID,
+      CHATS_PANE_ID,
+      MIDDLE_PANE_ID,
       MODAL_ID,
       SETTINGS_ID,
       TOAST_ID,
@@ -452,7 +527,8 @@
   }
 
   function shouldShowThirdPanel() {
-    return isSplitEnabled() && isWideViewport() && (isChatThreadOpen() || !!findProfileHost());
+    // Wide four-pane always shows profiles column; narrow uses middle tab
+    return isSplitEnabled() && (isWideViewport() || getMiddleTab() === "profiles");
   }
 
   function fingerprintUser(parts) {
@@ -682,16 +758,23 @@
       "#" + COMPOSER_ID + "," +
       "#" + COMPOSER_ID + " button," +
       "#" + COMPOSER_ID + " textarea," +
-      "#" + MESSENGER_ID + "," +
-      "#" + MESSENGER_ID + " button," +
-      "#" + MESSENGER_ID + " textarea," +
-      "#" + PROFILE_PANEL_ID + "," +
-      "#" + PROFILE_PANEL_ID + " button," +
-      "#" + PROFILE_PANEL_ID + " textarea {" +
+      "#" + THREAD_PANE_ID + "," +
+      "#" + THREAD_PANE_ID + " button," +
+      "#" + THREAD_PANE_ID + " textarea," +
+      "#" + CHATS_PANE_ID + "," +
+      "#" + CHATS_PANE_ID + " button," +
+      "#" + CHATS_PANE_ID + " input," +
+      "#" + PROFILES_PANE_ID + "," +
+      "#" + PROFILES_PANE_ID + " button," +
+      "#" + RAIL_ID + "," +
+      "#" + RAIL_ID + " button," +
+      "#" + MAP_PANE_ID + " .sniffies-pane-footer," +
+      "#" + MAP_PANE_ID + " .sniffies-pane-footer button," +
+      "#" + MIDDLE_PANE_ID + "," +
+      "#" + MIDDLE_PANE_ID + " button {" +
       "  pointer-events: auto !important;" +
       "}" +
-      /* Pass clicks through messenger body to native chat list underneath */
-      "#" + MESSENGER_ID + " .sniffies-pass-through {" +
+      "#" + THREAD_PANE_ID + " .sniffies-pass-through {" +
       "  pointer-events: none !important;" +
       "  flex: 1 1 auto;" +
       "  min-height: 80px;" +
@@ -1174,11 +1257,80 @@
       shellDirty = true;
       setTimeout(function () {
         renderShell(resolveViewState());
-        if (shouldShowThirdPanel()) renderProfilePanel();
       }, 250);
     } catch (e) {
       showToast("Couldn't open profile", "error");
     }
+  }
+
+  function cmdSayHi(card) {
+    openMarkerCard(card);
+    whenReady(
+      function () {
+        return !!getProfileChatButton() || isChatThreadOpen();
+      },
+      function (ok) {
+        if (isChatThreadOpen()) {
+          setMiddleTab("thread");
+          shellDirty = true;
+          renderShell(resolveViewState());
+          return;
+        }
+        if (ok) cmdStartChat();
+        else showToast("Open profile to say hi", "error");
+      }
+    );
+  }
+
+  function cmdNewChat() {
+    var candidates = qsa('button, [role="button"], a');
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (isOurUi(el) || !isVisible(el)) continue;
+      var label = ((el.getAttribute("aria-label") || "") + " " + (el.textContent || ""))
+        .toLowerCase()
+        .trim();
+      if (
+        label.indexOf("new chat") !== -1 ||
+        label.indexOf("new message") !== -1 ||
+        label.indexOf("compose") !== -1 ||
+        label === "new"
+      ) {
+        el.click();
+        showToast("New chat", "success");
+        return true;
+      }
+    }
+    showToast("New Chat control not found", "error");
+    return false;
+  }
+
+  function cmdActiveNowFilter() {
+    var hit = qsa("button, [role='button'], [role='tab'], a").find(function (b) {
+      if (isOurUi(b) || !isVisible(b)) return false;
+      var label = ((b.getAttribute("aria-label") || "") + " " + (b.textContent || "")).toLowerCase();
+      return label.indexOf("active now") !== -1 || (label.indexOf("active") !== -1 && label.indexOf("now") !== -1);
+    });
+    if (hit) {
+      hit.click();
+      showToast("Active Now", "success");
+      return;
+    }
+    cmdNativeMapLayers();
+  }
+
+  function cmdNearbyFilter() {
+    var hit = qsa("button, [role='button'], [role='tab'], a").find(function (b) {
+      if (isOurUi(b) || !isVisible(b)) return false;
+      var label = ((b.getAttribute("aria-label") || "") + " " + (b.textContent || "")).toLowerCase();
+      return label.indexOf("nearby") !== -1 || label.indexOf("near me") !== -1;
+    });
+    if (hit) {
+      hit.click();
+      showToast("Nearby", "success");
+      return;
+    }
+    showToast("Nearby filter not found", "error");
   }
 
   // ============================================================
@@ -1233,8 +1385,11 @@
 
   function ensureComposerHost() {
     if (isSplitEnabled()) {
-      var messenger = document.getElementById(MESSENGER_ID);
-      var host = messenger && messenger.querySelector("[data-composer-host]");
+      var thread = document.getElementById(THREAD_PANE_ID);
+      var host = thread && thread.querySelector("[data-composer-host]");
+      if (host) return host;
+      var middle = document.getElementById(MIDDLE_PANE_ID);
+      host = middle && middle.querySelector("[data-composer-host]");
       if (host) return host;
     }
     var el = document.getElementById(COMPOSER_ID);
@@ -1374,8 +1529,8 @@
 
     var el;
     if (split) {
-      var messenger = ensureMessenger();
-      var host = messenger.querySelector("[data-composer-host]");
+      var thread = ensureThreadPane();
+      var host = thread.querySelector("[data-composer-host]");
       if (!host) return;
       host.innerHTML = "";
       el = document.createElement("div");
@@ -1728,13 +1883,18 @@
   }
 
   // ============================================================
-  // SPLIT SHELL STYLES
+  // SPLIT SHELL STYLES — four-pane CSS grid
   // ============================================================
 
   function ensureSplitStyles() {
-    if (document.getElementById(SPLIT_STYLE_ID)) return;
+    var existing = document.getElementById(SPLIT_STYLE_ID);
+    if (existing) {
+      if (existing.getAttribute("data-v") === "6.0.0") return;
+      existing.remove();
+    }
     var style = document.createElement("style");
     style.id = SPLIT_STYLE_ID;
+    style.setAttribute("data-v", "6.0.0");
     style.textContent =
       "@keyframes sniffies-ai-shimmer {" +
       "  0% { background-position: 0% 50%; }" +
@@ -1769,19 +1929,6 @@
       "    radial-gradient(1px 1px at 40% 78%, rgba(255,255,255,0.4), transparent);" +
       "  animation: sniffies-sparkle 3.2s ease-in-out infinite;" +
       "}" +
-      "body.sniffies-split-on {" +
-      "  /* native map + chat list stay interactive; we only dock chrome */" +
-      "}" +
-      "body.sniffies-split-on.sniffies-left-map #sniffies-left-pane {" +
-      "  background: transparent;" +
-      "  pointer-events: none;" +
-      "}" +
-      "body.sniffies-split-on.sniffies-left-grid #sniffies-left-pane {" +
-      "  background: " +
-      THEME.bgPane +
-      ";" +
-      "  pointer-events: auto;" +
-      "}" +
       "#sniffies-split-shell {" +
       "  position: fixed;" +
       "  inset: 0;" +
@@ -1789,233 +1936,315 @@
       "  z-index: 999980;" +
       "  display: none;" +
       "  pointer-events: none;" +
-      "}" +
-      "body.sniffies-split-on #sniffies-split-shell { display: block; }" +
-      "#sniffies-left-pane," +
-      "#sniffies-messenger," +
-      "#sniffies-profile-panel {" +
-      "  position: absolute;" +
       "  box-sizing: border-box;" +
-      "  min-width: 0;" +
+      "  gap: 0;" +
       "}" +
-      "#sniffies-left-pane {" +
-      "  overflow: hidden;" +
+      "body.sniffies-split-on #sniffies-split-shell { display: grid; }" +
+      "body.sniffies-split-wide #sniffies-split-shell {" +
+      "  grid-template-columns: " +
+      RAIL_W +
+      "px minmax(0, 1.15fr) minmax(220px, 0.9fr) minmax(280px, 1fr) minmax(250px, 0.9fr);" +
+      "  grid-template-areas: 'rail map profiles thread chats';" +
       "}" +
-      "#sniffies-messenger {" +
-      "  pointer-events: none;" +
-      "  display: flex;" +
-      "  flex-direction: column;" +
-      "  background: transparent;" +
-      "  border-right: 1px solid " +
-      THEME.border +
-      ";" +
+      "body.sniffies-split-narrow #sniffies-split-shell {" +
+      "  grid-template-columns: " +
+      RAIL_W +
+      "px minmax(0, 1.1fr) minmax(280px, 1fr) minmax(240px, 0.85fr);" +
+      "  grid-template-areas: 'rail map middle chats';" +
       "}" +
-      "#sniffies-messenger > .sniffies-chrome {" +
-      "  pointer-events: auto;" +
-      "  background: " +
-      THEME.bgPane +
-      ";" +
+      "#" + RAIL_ID + " { grid-area: rail; pointer-events: auto; display: flex; flex-direction: column;" +
+      "  align-items: center; gap: 8px; padding: 12px 6px; background: " + THEME.bgSolid +
+      "; border-right: 1px solid " + THEME.border + "; }" +
+      "#" + MAP_PANE_ID + " { grid-area: map; position: relative; overflow: hidden;" +
+      "  background: transparent; pointer-events: none; }" +
+      "#" + PROFILES_PANE_ID + " { grid-area: profiles; pointer-events: auto; display: flex; flex-direction: column;" +
+      "  background: " + THEME.bgPane + "; border-right: 1px solid " + THEME.border + "; min-width: 0; overflow: hidden; }" +
+      "#" + THREAD_PANE_ID + " { grid-area: thread; pointer-events: auto; display: flex; flex-direction: column;" +
+      "  background: " + THEME.bgPane + "; border-right: 1px solid " + THEME.border + "; min-width: 0; overflow: hidden; }" +
+      "#" + CHATS_PANE_ID + " { grid-area: chats; pointer-events: auto; display: flex; flex-direction: column;" +
+      "  background: " + THEME.bgPane + "; min-width: 0; overflow: hidden; }" +
+      "#" + MIDDLE_PANE_ID + " { grid-area: middle; pointer-events: auto; display: none; flex-direction: column;" +
+      "  background: " + THEME.bgPane + "; border-right: 1px solid " + THEME.border + "; min-width: 0; overflow: hidden; }" +
+      "body.sniffies-split-narrow #" + MIDDLE_PANE_ID + " { display: flex; }" +
+      "body.sniffies-split-narrow #" + PROFILES_PANE_ID + "," +
+      "body.sniffies-split-narrow #" + THREAD_PANE_ID + " { display: none !important; }" +
+      "body.sniffies-split-wide #" + MIDDLE_PANE_ID + " { display: none !important; }" +
+      ".sniffies-pane-footer {" +
+      "  pointer-events: auto !important;" +
+      "  display: flex; align-items: center; gap: 6px; padding: 8px 10px;" +
+      "  min-height: " + PANE_FOOTER_H + "px; box-sizing: border-box; flex-shrink: 0;" +
+      "  border-top: 1px solid " + THEME.border + ";" +
+      "  background: " + THEME.bgPane + ";" +
+      "  backdrop-filter: blur(14px) saturate(1.15);" +
+      "  -webkit-backdrop-filter: blur(14px) saturate(1.15);" +
       "}" +
-      "#sniffies-profile-panel {" +
-      "  pointer-events: auto;" +
-      "  display: none;" +
-      "  flex-direction: column;" +
-      "  background: " +
-      THEME.bgPane +
-      ";" +
-      "  overflow: hidden;" +
-      "  border-left: 1px solid " +
-      THEME.border +
-      ";" +
+      "#" + MAP_PANE_ID + " .sniffies-pane-footer {" +
+      "  position: absolute; left: 0; right: 0; bottom: 0;" +
+      "  background: rgba(8, 11, 16, 0.88);" +
       "}" +
-      "body.sniffies-split-wide.sniffies-split-chat #sniffies-profile-panel {" +
-      "  display: flex;" +
+      ".sniffies-pane-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px; }" +
+      ".sniffies-pane-header {" +
+      "  display: flex; align-items: center; gap: 8px; padding: 10px 12px;" +
+      "  border-bottom: 1px solid " + THEME.border + "; flex-shrink: 0;" +
+      "}" +
+      ".sniffies-rail-btn {" +
+      "  width: 38px; height: 38px; border-radius: 12px;" +
+      "  border: 1px solid " + THEME.border + ";" +
+      "  background: " + THEME.chipBg + ";" +
+      "  color: " + THEME.textDim + ";" +
+      "  cursor: pointer; font-size: 11px; font-weight: 650;" +
+      "  font-family: -apple-system, system-ui, sans-serif;" +
+      "  display: flex; align-items: center; justify-content: center;" +
+      "}" +
+      ".sniffies-rail-btn.is-active {" +
+      "  color: " + THEME.accent + ";" +
+      "  border-color: " + THEME.accent + ";" +
+      "  background: rgba(91,157,255,0.12);" +
       "}" +
       "#sniffies-profile-save-btn {" +
-      "  position: absolute !important;" +
-      "  top: 12px !important;" +
-      "  right: 12px !important;" +
-      "  z-index: 1000001 !important;" +
+      "  position: absolute !important; top: 12px !important; right: 12px !important; z-index: 1000001 !important;" +
       "}";
     document.head.appendChild(style);
   }
 
-  // ============================================================
-  // LEFT PANE
-  // ============================================================
-
-  function ensureLeftPane() {
-    var shell = ensureShell();
-    var left = document.getElementById(LEFT_PANE_ID);
-    if (left) return left;
-    left = document.createElement("div");
-    left.id = LEFT_PANE_ID;
-    shell.insertBefore(left, shell.firstChild);
-    return left;
+  function makePaneFooter() {
+    var foot = document.createElement("div");
+    foot.className = "sniffies-pane-footer sniffies-chrome";
+    return foot;
   }
 
-  function renderLeftPane() {
-    var left = ensureLeftPane();
-    var mode = getLeftMode();
-    document.body.classList.toggle("sniffies-left-map", mode === "map");
-    document.body.classList.toggle("sniffies-left-grid", mode === "grid");
+  function footerTone(btn, active, base) {
+    setBtnTone(btn, active, base);
+    if (btn) btn.style.borderColor = active ? THEME.accent : THEME.border;
+  }
 
-    if (mode === "map") {
-      left.innerHTML = "";
-      var hint = document.createElement("div");
-      Object.assign(hint.style, {
-        position: "absolute",
-        left: "12px",
-        top: "12px",
-        padding: "6px 10px",
-        borderRadius: "999px",
-        background: "rgba(10,14,20,0.55)",
-        border: "1px solid " + THEME.border,
-        color: THEME.textDim,
-        fontSize: "11px",
-        fontFamily: "-apple-system, system-ui, sans-serif",
-        pointerEvents: "none",
-        backdropFilter: "blur(8px)"
-      });
-      hint.textContent = "Map";
-      left.appendChild(hint);
-      return;
-    }
-
-    left.innerHTML = "";
-    Object.assign(left.style, {
-      display: "flex",
-      flexDirection: "column",
-      padding: "12px",
-      gap: "10px",
-      overflow: "auto"
-    });
-
+  function makePaneHeader(titleText, extra) {
     var head = document.createElement("div");
-    Object.assign(head.style, {
-      display: "flex",
-      alignItems: "center",
-      gap: "8px"
-    });
+    head.className = "sniffies-pane-header sniffies-chrome";
     var title = document.createElement("div");
-    title.textContent = "Nearby";
+    title.textContent = titleText;
     Object.assign(title.style, {
-      flex: "1",
-      color: THEME.text,
-      fontWeight: "650",
-      fontSize: "15px",
-      fontFamily: "-apple-system, system-ui, sans-serif"
+      flex: "1", color: THEME.text, fontWeight: "650", fontSize: "14px",
+      fontFamily: "-apple-system, system-ui, sans-serif",
+      whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
     });
     head.appendChild(title);
-    head.appendChild(
-      makeIconBtn(
-        "↻",
-        function () {
-          scrapeMapMarkers();
-          renderLeftPane();
-        },
-        THEME.textDim
-      )
-    );
-    left.appendChild(head);
+    if (extra) head.appendChild(extra);
+    return head;
+  }
 
+  function styleOpaquePane(el) {
+    Object.assign(el.style, { display: "flex", flexDirection: "column", minWidth: "0", overflow: "hidden" });
+  }
+
+  function ensureRail() {
+    var shell = ensureShell();
+    var rail = document.getElementById(RAIL_ID);
+    if (rail) return rail;
+    rail = document.createElement("div");
+    rail.id = RAIL_ID;
+    shell.appendChild(rail);
+    return rail;
+  }
+
+  function renderRail(force) {
+    var rail = ensureRail();
+    var focus = getRailFocus();
+    var key = focus + ":" + (isWideViewport() ? "w" : "n");
+    if (!force && key === lastRailRenderKey && rail.childNodes.length) {
+      qsa(".sniffies-rail-btn", rail).forEach(function (btn) {
+        btn.classList.toggle("is-active", btn.getAttribute("data-focus") === focus);
+      });
+      return;
+    }
+    lastRailRenderKey = key;
+    rail.innerHTML = "";
+
+    function railBtn(label, focusId) {
+      var b = document.createElement("button");
+      b.type = "button";
+      b.className = "sniffies-rail-btn" + (focus === focusId ? " is-active" : "");
+      b.setAttribute("data-focus", focusId);
+      b.textContent = label;
+      b.title = label;
+      b.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        setRailFocus(focusId);
+        if (focusId === "chats") {
+          messengerMode = "chats";
+          cmdOpenChats();
+        }
+        renderShell(resolveViewState());
+      });
+      return b;
+    }
+    rail.appendChild(railBtn("Map", "map"));
+    rail.appendChild(railBtn("Msgs", "chats"));
+    rail.appendChild(railBtn("Prof", "profiles"));
+  }
+
+  function ensureMapPane() {
+    var shell = ensureShell();
+    var pane = document.getElementById(MAP_PANE_ID);
+    if (pane) return pane;
+    pane = document.createElement("div");
+    pane.id = MAP_PANE_ID;
+    shell.appendChild(pane);
+    return pane;
+  }
+
+  function buildMapPaneFooter() {
+    var foot = makePaneFooter();
+    foot.appendChild(makeBtn("Active Now", cmdActiveNowFilter, { compact: true, color: THEME.green }));
+    foot.appendChild(makeBtn("Nearby", cmdNearbyFilter, { compact: true, color: THEME.accent }));
+    var spacerEl = document.createElement("div");
+    spacerEl.style.flex = "1";
+    foot.appendChild(spacerEl);
+    foot.appendChild(makeBtn("Layers", cmdNativeMapLayers, { compact: true, color: THEME.textMute }));
+    return foot;
+  }
+
+  function renderMapPane(force) {
+    var pane = ensureMapPane();
+    if (!force && lastMapRenderKey === "map" && pane.childNodes.length) return;
+    lastMapRenderKey = "map";
+    pane.innerHTML = "";
+    var hint = document.createElement("div");
+    Object.assign(hint.style, {
+      position: "absolute", left: "12px", top: "12px", padding: "6px 10px",
+      borderRadius: "999px", background: "rgba(10,14,20,0.55)",
+      border: "1px solid " + THEME.border, color: THEME.textDim, fontSize: "11px",
+      fontFamily: "-apple-system, system-ui, sans-serif", pointerEvents: "none", backdropFilter: "blur(8px)"
+    });
+    hint.textContent = "Map";
+    pane.appendChild(hint);
+    pane.appendChild(buildMapPaneFooter());
+  }
+
+  function ensureProfilesPane() {
+    var shell = ensureShell();
+    var pane = document.getElementById(PROFILES_PANE_ID);
+    if (pane) return pane;
+    pane = document.createElement("div");
+    pane.id = PROFILES_PANE_ID;
+    shell.appendChild(pane);
+    return pane;
+  }
+
+  function buildProfileCard(card) {
+    var cell = document.createElement("div");
+    Object.assign(cell.style, {
+      display: "flex", flexDirection: "column", gap: "6px", padding: "0",
+      border: "1px solid " + THEME.border, borderRadius: "14px", overflow: "hidden",
+      background: THEME.chipBg, color: THEME.text, fontFamily: "-apple-system, system-ui, sans-serif"
+    });
+    var imgWrap = document.createElement("button");
+    imgWrap.type = "button";
+    Object.assign(imgWrap.style, {
+      width: "100%", aspectRatio: "1", padding: "0", border: "none",
+      background: "rgba(255,255,255,0.04)", overflow: "hidden", cursor: "pointer"
+    });
+    if (card.avatar) {
+      var img = document.createElement("img");
+      img.src = card.avatar;
+      img.alt = card.name || "";
+      Object.assign(img.style, { width: "100%", height: "100%", objectFit: "cover", display: "block" });
+      imgWrap.appendChild(img);
+    }
+    imgWrap.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openMarkerCard(card);
+    });
+    cell.appendChild(imgWrap);
+    var meta = document.createElement("div");
+    Object.assign(meta.style, { padding: "0 8px 8px" });
+    var name = document.createElement("div");
+    name.textContent = card.name || "Nearby";
+    Object.assign(name.style, {
+      fontSize: "12px", fontWeight: "600", whiteSpace: "nowrap",
+      overflow: "hidden", textOverflow: "ellipsis", marginBottom: "6px"
+    });
+    meta.appendChild(name);
+    if (card.distance) {
+      var dist = document.createElement("div");
+      dist.textContent = card.distance;
+      Object.assign(dist.style, { fontSize: "11px", color: THEME.textMute, marginBottom: "6px" });
+      meta.appendChild(dist);
+    }
+    var actions = document.createElement("div");
+    Object.assign(actions.style, { display: "flex", gap: "4px", flexWrap: "wrap" });
+    actions.appendChild(makeBtn("View", function () { openMarkerCard(card); }, { compact: true, color: THEME.textDim }));
+    actions.appendChild(makeBtn("Say Hi", function () { cmdSayHi(card); }, { compact: true, color: THEME.accent, bold: true }));
+    meta.appendChild(actions);
+    cell.appendChild(meta);
+    return cell;
+  }
+
+  function fillProfilesBody(scroll) {
+    scroll.innerHTML = "";
+    var cards = scrapeMapMarkers();
     var grid = document.createElement("div");
     Object.assign(grid.style, {
-      display: "grid",
-      gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))",
-      gap: "10px"
+      display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(118px, 1fr))", gap: "10px"
     });
-
-    var cards = scrapeMapMarkers();
     if (!cards.length) {
       var empty = document.createElement("div");
-      empty.textContent = "No visible map profiles — pan the map or switch to Map.";
+      empty.textContent = "No visible map profiles — pan the map.";
       Object.assign(empty.style, {
-        color: THEME.textMute,
-        fontSize: "13px",
-        gridColumn: "1 / -1",
-        padding: "18px 4px",
-        lineHeight: "1.4"
+        color: THEME.textMute, fontSize: "13px", gridColumn: "1 / -1", padding: "18px 4px", lineHeight: "1.4"
       });
       grid.appendChild(empty);
     } else {
-      cards.forEach(function (card) {
-        var cell = document.createElement("button");
-        cell.type = "button";
-        Object.assign(cell.style, {
-          display: "flex",
-          flexDirection: "column",
-          gap: "6px",
-          padding: "0",
-          border: "1px solid " + THEME.border,
-          borderRadius: "14px",
-          overflow: "hidden",
-          background: THEME.chipBg,
-          cursor: "pointer",
-          color: THEME.text,
-          fontFamily: "-apple-system, system-ui, sans-serif",
-          textAlign: "left"
-        });
-        var imgWrap = document.createElement("div");
-        Object.assign(imgWrap.style, {
-          width: "100%",
-          aspectRatio: "1",
-          background: "rgba(255,255,255,0.04)",
-          overflow: "hidden"
-        });
-        if (card.avatar) {
-          var img = document.createElement("img");
-          img.src = card.avatar;
-          img.alt = card.name || "";
-          Object.assign(img.style, {
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            display: "block"
-          });
-          imgWrap.appendChild(img);
-        }
-        var meta = document.createElement("div");
-        Object.assign(meta.style, { padding: "0 8px 8px" });
-        var name = document.createElement("div");
-        name.textContent = card.name || "Nearby";
-        Object.assign(name.style, {
-          fontSize: "12px",
-          fontWeight: "600",
-          whiteSpace: "nowrap",
-          overflow: "hidden",
-          textOverflow: "ellipsis"
-        });
-        meta.appendChild(name);
-        if (card.distance) {
-          var dist = document.createElement("div");
-          dist.textContent = card.distance;
-          Object.assign(dist.style, { fontSize: "11px", color: THEME.textMute, marginTop: "2px" });
-          meta.appendChild(dist);
-        }
-        cell.appendChild(imgWrap);
-        cell.appendChild(meta);
-        cell.addEventListener("click", function (e) {
-          e.preventDefault();
-          e.stopPropagation();
-          openMarkerCard(card);
-        });
-        grid.appendChild(cell);
-      });
+      cards.forEach(function (card) { grid.appendChild(buildProfileCard(card)); });
     }
-    left.appendChild(grid);
+    scroll.appendChild(grid);
+    return cards;
   }
 
-  // ============================================================
-  // MESSENGER PANE
-  // ============================================================
+  function buildProfilesFooter() {
+    var foot = makePaneFooter();
+    foot.appendChild(makeBtn("Refresh", function () {
+      lastProfilesRenderKey = "";
+      lastMiddleRenderKey = "";
+      scrapeMapMarkers();
+      renderShell(resolveViewState());
+    }, { compact: true, color: THEME.textDim }));
+    var sp = document.createElement("div");
+    sp.style.flex = "1";
+    foot.appendChild(sp);
+    foot.appendChild(makeBtn("Layers", cmdNativeMapLayers, { compact: true, color: THEME.textMute }));
+    return foot;
+  }
 
-  function ensureMessenger() {
+  function renderProfilesPane(force) {
+    var pane = ensureProfilesPane();
+    styleOpaquePane(pane);
+    var cards = scrapeMapMarkers();
+    var key = "p:" + cards.map(function (c) { return (c.name || "") + "|" + (c.avatar || ""); }).join(",");
+    if (!force && key === lastProfilesRenderKey && pane.childNodes.length) return;
+    lastProfilesRenderKey = key;
+    pane.innerHTML = "";
+    var refreshBtn = makeIconBtn("↻", function () {
+      lastProfilesRenderKey = "";
+      scrapeMapMarkers();
+      renderProfilesPane(true);
+    }, THEME.textDim);
+    pane.appendChild(makePaneHeader("Browse Profiles", refreshBtn));
+    var scroll = document.createElement("div");
+    scroll.className = "sniffies-pane-scroll";
+    fillProfilesBody(scroll);
+    pane.appendChild(scroll);
+    pane.appendChild(buildProfilesFooter());
+  }
+
+  function ensureThreadPane() {
     var shell = ensureShell();
-    var pane = document.getElementById(MESSENGER_ID);
+    var pane = document.getElementById(THREAD_PANE_ID);
     if (pane) return pane;
     pane = document.createElement("div");
-    pane.id = MESSENGER_ID;
+    pane.id = THREAD_PANE_ID;
     shell.appendChild(pane);
     return pane;
   }
@@ -2026,463 +2255,412 @@
       if (isOurUi(row) || !isVisible(row)) return;
       var text = (row.textContent || "").replace(/\s+/g, " ").trim();
       var img = qs("img", row);
+      var unread =
+        /unread|new/i.test(row.getAttribute("aria-label") || "") ||
+        !!qs('[class*="unread"], [class*="badge"], [data-testid*="unread"]', row) ||
+        /\b\d+\s*unread\b/i.test(text);
       rows.push({
         el: row,
         title: text.slice(0, 60) || "Chat",
         avatar: img ? img.currentSrc || img.src || "" : "",
-        preview: text
+        preview: text,
+        unread: unread
       });
     });
-    return rows.slice(0, 40);
+    return rows.slice(0, 60);
   }
 
-  function renderMessengerBody(body) {
-    body.innerHTML = "";
+  function openChatRow(row) {
+    if (!row || !row.el) return;
+    try {
+      row.el.click();
+      setMiddleTab("thread");
+      setRailFocus("chats");
+      shellDirty = true;
+      setTimeout(function () {
+        lastThreadRenderKey = "";
+        lastChatsRenderKey = "";
+        renderShell(resolveViewState());
+      }, 200);
+    } catch (err) {}
+  }
 
-    if (messengerMode === "notes" && !isChatThreadOpen()) {
-      var notes = getNotesMap();
-      var keys = Object.keys(notes);
-      if (!keys.length) {
-        var emptyN = document.createElement("div");
-        emptyN.textContent = "No notes yet. Open a chat or profile and add notes in the profile panel.";
-        Object.assign(emptyN.style, {
-          color: THEME.textMute,
-          fontSize: "13px",
-          lineHeight: "1.45",
-          padding: "8px 2px"
-        });
-        body.appendChild(emptyN);
-        return;
-      }
-      keys.forEach(function (key) {
-        var card = document.createElement("div");
-        Object.assign(card.style, {
-          padding: "10px 12px",
-          borderRadius: "12px",
-          border: "1px solid " + THEME.border,
-          background: THEME.chipBg,
-          marginBottom: "8px"
-        });
-        var k = document.createElement("div");
-        k.textContent = key.indexOf(":") >= 0 ? key.split(":").slice(1).join(":") : key;
-        Object.assign(k.style, {
-          fontSize: "12px",
-          fontWeight: "600",
-          color: THEME.gold,
-          marginBottom: "4px"
-        });
-        var v = document.createElement("div");
-        v.textContent = notes[key];
-        Object.assign(v.style, { fontSize: "13px", color: THEME.textDim, whiteSpace: "pre-wrap" });
-        card.appendChild(k);
-        card.appendChild(v);
-        body.appendChild(card);
-      });
+  function renderThreadBody(body) {
+    body.innerHTML = "";
+    if (!isChatThreadOpen()) {
+      var empty = document.createElement("div");
+      empty.textContent = "Select a chat from All Chats to open the thread.";
+      Object.assign(empty.style, { color: THEME.textMute, fontSize: "13px", lineHeight: "1.45", padding: "8px 2px" });
+      body.appendChild(empty);
       return;
     }
-
-    if (isChatThreadOpen()) {
-      var threadHint = document.createElement("div");
-      Object.assign(threadHint.style, {
-        color: THEME.textMute,
-        fontSize: "12px",
-        marginBottom: "10px",
-        lineHeight: "1.4"
-      });
-      threadHint.textContent =
-        "Active chat is open on Sniffies. Use the composer below — messages send through the native chat.";
-      body.appendChild(threadHint);
-
-      var recent = getRecentChatTexts().slice(-6);
+    var recent = getRecentChatTexts().slice(-12);
+    if (!recent.length) {
+      var waiting = document.createElement("div");
+      waiting.textContent = "Thread open — messages will appear as they load.";
+      Object.assign(waiting.style, { color: THEME.textMute, fontSize: "13px", lineHeight: "1.45" });
+      body.appendChild(waiting);
+    } else {
       recent.forEach(function (t) {
         var bubble = document.createElement("div");
         bubble.textContent = t;
         Object.assign(bubble.style, {
-          padding: "8px 11px",
-          borderRadius: "12px",
-          background: "rgba(255,255,255,0.04)",
-          border: "1px solid " + THEME.border,
-          color: THEME.textDim,
-          fontSize: "12.5px",
-          marginBottom: "6px",
-          lineHeight: "1.35"
+          padding: "8px 11px", borderRadius: "12px", background: "rgba(255,255,255,0.04)",
+          border: "1px solid " + THEME.border, color: THEME.textDim, fontSize: "12.5px",
+          marginBottom: "6px", lineHeight: "1.35"
         });
         body.appendChild(bubble);
       });
+    }
+    var userKey = activeUserKey();
+    if (userKey) {
+      var noteBox = document.createElement("textarea");
+      noteBox.placeholder = "Private notes for this chat…";
+      noteBox.value = getNote(userKey);
+      Object.assign(noteBox.style, {
+        width: "100%", minHeight: "64px", marginTop: "10px", resize: "vertical",
+        padding: "10px 12px", borderRadius: "12px", border: "1px solid " + THEME.border,
+        background: "rgba(255,255,255,0.03)", color: THEME.text, fontSize: "13px",
+        fontFamily: "-apple-system, system-ui, sans-serif", boxSizing: "border-box", outline: "none"
+      });
+      noteBox.onblur = function () { setNote(userKey, noteBox.value); };
+      body.appendChild(noteBox);
+    }
+  }
 
-      var userKey = activeUserKey();
-      if (userKey) {
-        var noteBox = document.createElement("textarea");
-        noteBox.placeholder = "Private notes for this chat…";
-        noteBox.value = getNote(userKey);
-        Object.assign(noteBox.style, {
-          width: "100%",
-          minHeight: "72px",
-          marginTop: "10px",
-          resize: "vertical",
-          padding: "10px 12px",
-          borderRadius: "12px",
-          border: "1px solid " + THEME.border,
-          background: "rgba(255,255,255,0.03)",
-          color: THEME.text,
-          fontSize: "13px",
-          fontFamily: "-apple-system, system-ui, sans-serif",
-          boxSizing: "border-box",
-          outline: "none"
-        });
-        noteBox.onblur = function () {
-          setNote(userKey, noteBox.value);
-        };
-        body.appendChild(noteBox);
+  function renderThreadPane(force) {
+    var pane = ensureThreadPane();
+    styleOpaquePane(pane);
+    var existingComposerText = "";
+    var prevTa = getComposerTextarea();
+    if (prevTa) existingComposerText = prevTa.value || "";
+    var chatOpen = isChatThreadOpen();
+    var title = scrapeActiveThreadTitle() || "";
+    var mKey = (chatOpen ? "chat" : "empty") + ":" + title + ":" + getRecentChatTexts().slice(-4).join("|").slice(0, 80);
+    if (!force && mKey === lastThreadRenderKey && pane.childNodes.length && !shellDirty) {
+      if (chatOpen) {
+        var host = pane.querySelector("[data-composer-host]");
+        if (host && !host.querySelector("#" + COMPOSER_ID)) {
+          renderComposer("CHAT");
+          if (existingComposerText) setComposerText(existingComposerText);
+        }
       }
       return;
     }
+    lastThreadRenderKey = mKey;
+    lastMessengerKey = mKey;
+    pane.innerHTML = "";
+    var status = document.createElement("div");
+    status.textContent = chatOpen ? "Active" : "No thread";
+    Object.assign(status.style, { fontSize: "11px", color: chatOpen ? THEME.green : THEME.textMute, fontWeight: "600", flexShrink: "0" });
+    pane.appendChild(makePaneHeader(title || "Active Chat", status));
+    var body = document.createElement("div");
+    body.className = "sniffies-pane-scroll";
+    renderThreadBody(body);
+    pane.appendChild(body);
+    if (chatOpen) {
+      var composerHost = document.createElement("div");
+      composerHost.className = "sniffies-chrome";
+      composerHost.setAttribute("data-composer-host", "1");
+      composerHost.style.flexShrink = "0";
+      composerHost.style.pointerEvents = "auto";
+      pane.appendChild(composerHost);
+      renderComposer("CHAT");
+      if (existingComposerText) setComposerText(existingComposerText);
+    } else {
+      hideComposer();
+      var foot = makePaneFooter();
+      foot.appendChild(makeBtn("Open Chats", function () {
+        messengerMode = "chats";
+        cmdOpenChats();
+        shellDirty = true;
+        lastChatsRenderKey = "";
+        renderShell(resolveViewState());
+      }, { compact: true, color: THEME.accent }));
+      pane.appendChild(foot);
+    }
+  }
 
-    var rows = scrapeChatListRows();
+  function ensureChatsPane() {
+    var shell = ensureShell();
+    var pane = document.getElementById(CHATS_PANE_ID);
+    if (pane) return pane;
+    pane = document.createElement("div");
+    pane.id = CHATS_PANE_ID;
+    shell.appendChild(pane);
+    return pane;
+  }
+
+  function filterChatRows(rows) {
+    var q = (chatsSearchQuery || "").toLowerCase().trim();
+    return rows.filter(function (row) {
+      if (chatsFilter === "unread" && !row.unread) return false;
+      if (q && (row.title + " " + row.preview).toLowerCase().indexOf(q) === -1) return false;
+      return true;
+    });
+  }
+
+  function buildChatsListBody(scroll) {
+    scroll.innerHTML = "";
+    var tabs = document.createElement("div");
+    Object.assign(tabs.style, { display: "flex", gap: "6px", marginBottom: "10px", flexWrap: "wrap" });
+    tabs.appendChild(makeBtn("Recents", function () {
+      messengerMode = "chats";
+      cmdOpenChats();
+      clickChatListTab(["recent", "inbox", "all"]);
+      shellDirty = true;
+      lastChatsRenderKey = "";
+      setTimeout(function () { renderChatsPane(true); }, 180);
+    }, { compact: true, color: messengerMode === "chats" || messengerMode === "notes" ? THEME.accent : THEME.textDim }));
+    tabs.appendChild(makeBtn("Pinned", function () {
+      cmdPinned();
+      setTimeout(function () { lastChatsRenderKey = ""; renderChatsPane(true); }, 180);
+    }, { compact: true, color: messengerMode === "pinned" ? THEME.accent : THEME.textDim }));
+    tabs.appendChild(makeBtn("Places", function () {
+      cmdSaved();
+      setTimeout(function () { lastChatsRenderKey = ""; renderChatsPane(true); }, 180);
+    }, { compact: true, color: messengerMode === "saved" ? THEME.accent : THEME.textDim }));
+    scroll.appendChild(tabs);
+
+    var rows = filterChatRows(scrapeChatListRows());
     if (!rows.length) {
       var empty = document.createElement("div");
-      empty.textContent = "Open Chats to load threads, or use Pinned / Saved above.";
+      empty.textContent = chatsSearchQuery || chatsFilter !== "all"
+        ? "No matching chats."
+        : "Open Chats to load threads, or use Recents / Pinned / Places.";
       Object.assign(empty.style, { color: THEME.textMute, fontSize: "13px", lineHeight: "1.45" });
-      body.appendChild(empty);
-      var openBtn = makeBtn(
-        "Open Chats",
-        function () {
-          messengerMode = "chats";
-          cmdOpenChats();
-        },
-        { color: THEME.accent, compact: true }
-      );
-      openBtn.style.marginTop = "12px";
-      body.appendChild(openBtn);
+      scroll.appendChild(empty);
       return;
     }
-
     rows.forEach(function (row) {
       var item = document.createElement("button");
       item.type = "button";
       Object.assign(item.style, {
-        display: "flex",
-        alignItems: "center",
-        gap: "10px",
-        width: "100%",
-        padding: "10px",
-        marginBottom: "6px",
-        borderRadius: "12px",
-        border: "1px solid " + THEME.border,
-        background: THEME.chipBg,
-        cursor: "pointer",
-        color: THEME.text,
-        textAlign: "left",
+        display: "flex", alignItems: "center", gap: "10px", width: "100%", padding: "10px",
+        marginBottom: "6px", borderRadius: "12px", border: "1px solid " + THEME.border,
+        background: THEME.chipBg, cursor: "pointer", color: THEME.text, textAlign: "left",
         fontFamily: "-apple-system, system-ui, sans-serif"
       });
       if (row.avatar) {
         var av = document.createElement("img");
         av.src = row.avatar;
-        Object.assign(av.style, {
-          width: "40px",
-          height: "40px",
-          borderRadius: "50%",
-          objectFit: "cover",
-          flexShrink: "0"
-        });
+        Object.assign(av.style, { width: "40px", height: "40px", borderRadius: "50%", objectFit: "cover", flexShrink: "0" });
         item.appendChild(av);
       }
       var txt = document.createElement("div");
       txt.style.flex = "1";
       txt.style.minWidth = "0";
-      var title = document.createElement("div");
-      title.textContent = row.title;
-      Object.assign(title.style, {
-        fontSize: "13px",
-        fontWeight: "600",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis"
+      var titleEl = document.createElement("div");
+      titleEl.textContent = row.title;
+      Object.assign(titleEl.style, {
+        fontSize: "13px", fontWeight: row.unread ? "700" : "600",
+        whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"
       });
-      txt.appendChild(title);
+      txt.appendChild(titleEl);
+      if (row.unread) {
+        var badge = document.createElement("div");
+        badge.textContent = "Unread";
+        Object.assign(badge.style, { fontSize: "10px", color: THEME.accent, marginTop: "2px" });
+        txt.appendChild(badge);
+      }
       item.appendChild(txt);
       item.addEventListener("click", function (e) {
         e.preventDefault();
         e.stopPropagation();
-        try {
-          row.el.click();
-          shellDirty = true;
-          setTimeout(function () {
-            renderShell(resolveViewState());
-          }, 200);
-        } catch (err) {}
+        openChatRow(row);
       });
-      body.appendChild(item);
+      scroll.appendChild(item);
     });
   }
 
-  function renderMessenger() {
-    var pane = ensureMessenger();
-    var existingComposerText = "";
-    var prevTa = getComposerTextarea();
-    if (prevTa) existingComposerText = prevTa.value || "";
+  function buildChatsFooter() {
+    var foot = makePaneFooter();
+    foot.appendChild(makeBtn("New", cmdNewChat, { compact: true, color: THEME.accent }));
+    foot.appendChild(makeBtn(chatsSearchQuery ? "Search●" : "Search", function () {
+      var next = window.prompt("Filter chats", chatsSearchQuery || "");
+      if (next == null) return;
+      chatsSearchQuery = String(next).trim();
+      lastChatsRenderKey = "";
+      renderChatsPane(true);
+    }, { compact: true, color: chatsSearchQuery ? THEME.accent : THEME.textDim }));
+    function filterBtn(label, id) {
+      var b = makeBtn(label, function () {
+        chatsFilter = id;
+        if (id === "favorites") {
+          messengerMode = "pinned";
+          cmdPinned();
+        }
+        lastChatsRenderKey = "";
+        setTimeout(function () { renderChatsPane(true); }, id === "favorites" ? 180 : 0);
+      }, { compact: true, color: chatsFilter === id ? THEME.accent : THEME.textMute });
+      footerTone(b, chatsFilter === id, THEME.textMute);
+      return b;
+    }
+    foot.appendChild(filterBtn("All", "all"));
+    foot.appendChild(filterBtn("Unread", "unread"));
+    foot.appendChild(filterBtn("Fav", "favorites"));
+    return foot;
+  }
 
+  function renderChatsPane(force) {
+    var pane = ensureChatsPane();
+    styleOpaquePane(pane);
+    var rows = scrapeChatListRows();
+    var key = messengerMode + ":" + chatsFilter + ":" + chatsSearchQuery + ":" +
+      rows.map(function (r) { return r.title; }).join("|").slice(0, 160);
+    if (!force && key === lastChatsRenderKey && pane.childNodes.length) return;
+    lastChatsRenderKey = key;
     pane.innerHTML = "";
-
-    var top = document.createElement("div");
-    top.className = "sniffies-chrome";
-    Object.assign(top.style, {
-      display: "flex",
-      alignItems: "center",
-      gap: "6px",
-      padding: "10px 12px",
-      borderBottom: "1px solid " + THEME.border,
-      flexShrink: "0",
-      overflowX: "auto",
-      borderRadius: "0 0 12px 12px"
-    });
-
-    function topBtn(label, mode, action) {
-      var active = messengerMode === mode;
-      return makeBtn(
-        label,
-        function () {
-          messengerMode = mode;
-          if (action) action();
-          else {
-            shellDirty = true;
-            renderMessenger();
-          }
-        },
-        { color: active ? THEME.accent : THEME.textDim, compact: true }
-      );
-    }
-
-    top.appendChild(topBtn("Pinned", "pinned", cmdPinned));
-    top.appendChild(topBtn("Saved", "saved", cmdSaved));
-    top.appendChild(topBtn("Notes", "notes", cmdNotesList));
-
-    var threadTitle = scrapeActiveThreadTitle();
-    if (threadTitle || isChatThreadOpen()) {
-      var sep = document.createElement("div");
-      sep.style.flex = "1";
-      top.appendChild(sep);
-      var titleEl = document.createElement("div");
-      titleEl.textContent = threadTitle || "Chat";
-      Object.assign(titleEl.style, {
-        color: THEME.text,
-        fontSize: "13px",
-        fontWeight: "600",
-        maxWidth: "40%",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        fontFamily: "-apple-system, system-ui, sans-serif"
-      });
-      top.appendChild(titleEl);
-    }
-    pane.appendChild(top);
-
-    var body = document.createElement("div");
-    // Default: let native chat list / thread receive clicks through the middle
-    var passThrough = messengerMode === "chats" || messengerMode === "pinned" || messengerMode === "saved";
-    if (passThrough && !isChatThreadOpen()) {
-      body.className = "sniffies-pass-through";
-      body.title = "Native chat list";
-    } else if (messengerMode === "notes") {
-      Object.assign(body.style, {
-        flex: "1",
-        overflow: "auto",
-        padding: "12px",
-        minHeight: "0",
-        pointerEvents: "auto",
-        background: THEME.bgPane
-      });
-      renderMessengerBody(body);
-    } else {
-      body.className = "sniffies-pass-through";
-    }
-    pane.appendChild(body);
-
-    var composerHost = document.createElement("div");
-    composerHost.className = "sniffies-chrome";
-    composerHost.setAttribute("data-composer-host", "1");
-    composerHost.style.flexShrink = "0";
-    composerHost.style.pointerEvents = "auto";
-    pane.appendChild(composerHost);
-
-    if (isChatThreadOpen()) {
-      renderComposer("CHAT");
-      if (existingComposerText) setComposerText(existingComposerText);
-    } else {
-      hideComposer();
-    }
+    pane.appendChild(makePaneHeader("All Chats"));
+    var scroll = document.createElement("div");
+    scroll.className = "sniffies-pane-scroll";
+    buildChatsListBody(scroll);
+    pane.appendChild(scroll);
+    pane.appendChild(buildChatsFooter());
   }
 
-  // ============================================================
-  // PROFILE PANEL (wide + chat)
-  // ============================================================
-
-  function ensureProfilePanel() {
+  function ensureMiddlePane() {
     var shell = ensureShell();
-    var pane = document.getElementById(PROFILE_PANEL_ID);
+    var pane = document.getElementById(MIDDLE_PANE_ID);
     if (pane) return pane;
     pane = document.createElement("div");
-    pane.id = PROFILE_PANEL_ID;
+    pane.id = MIDDLE_PANE_ID;
     shell.appendChild(pane);
     return pane;
   }
 
-  function renderProfilePanel() {
-    var pane = ensureProfilePanel();
-    if (!shouldShowThirdPanel()) {
+  function renderComposerIntoHost(host, existingText) {
+    if (!host) return;
+    setComposerTakeover(true);
+    host.innerHTML = "";
+    var el = document.createElement("div");
+    el.id = COMPOSER_ID;
+    el.setAttribute("data-split-embedded", "1");
+    Object.assign(el.style, {
+      display: "flex", flexDirection: "column", gap: "8px", padding: "10px 12px 12px",
+      boxSizing: "border-box", background: "transparent", borderTop: "1px solid " + THEME.border,
+      position: "relative", zIndex: "1"
+    });
+    var old = document.getElementById(COMPOSER_ID);
+    if (old && old !== el) old.remove();
+    host.appendChild(el);
+    var stateData = loadState();
+    if (stateData.aiEnabled) {
+      el.appendChild(buildAiStrip(function () {
+        renderComposerIntoHost(host, getComposerTextarea() ? getComposerTextarea().value : "");
+      }));
+    }
+    var quickRow = makeChipRow();
+    loadQuickMessages().forEach(function (msg) {
+      var text = msg.text;
+      quickRow.appendChild(makeBtn(msg.label, function () { setComposerText(text); }, { compact: true }));
+    });
+    quickRow.appendChild(makeBtn("Pics", cmdPics, { color: THEME.gold, compact: true }));
+    el.appendChild(quickRow);
+    var inputRow = document.createElement("div");
+    Object.assign(inputRow.style, { display: "flex", alignItems: "flex-end", gap: "8px" });
+    var ta = document.createElement("textarea");
+    ta.rows = 1;
+    ta.placeholder = "Message…";
+    ta.value = existingText || "";
+    Object.assign(ta.style, {
+      flex: "1", resize: "none", minHeight: "42px", maxHeight: "120px", padding: "11px 14px",
+      borderRadius: "14px", border: "1px solid " + THEME.border, background: "rgba(255,255,255,0.04)",
+      color: THEME.text, fontSize: "14px", lineHeight: "1.35",
+      fontFamily: "-apple-system, system-ui, sans-serif", outline: "none"
+    });
+    ta.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        cmdComposerSend();
+      }
+    });
+    var sendBtn = makeBtn("Send", cmdComposerSend, { bg: THEME.accentBg, color: "#fff", bold: true, primary: true });
+    sendBtn.style.height = "42px";
+    sendBtn.style.padding = "0 16px";
+    inputRow.appendChild(ta);
+    inputRow.appendChild(sendBtn);
+    el.appendChild(inputRow);
+  }
+
+  function renderMiddlePane(force) {
+    var pane = ensureMiddlePane();
+    if (isWideViewport()) {
       pane.innerHTML = "";
+      lastMiddleRenderKey = "";
       return;
     }
-
-    var meta = scrapeProfileMeta();
-    var userKey = meta.key || activeUserKey();
+    styleOpaquePane(pane);
+    var tab = getMiddleTab();
+    var chatOpen = isChatThreadOpen();
+    var key = tab + ":" + (chatOpen ? "c" : "e") + ":" + (scrapeActiveThreadTitle() || "") + ":" + lastGridCards.length;
+    if (!force && key === lastMiddleRenderKey && pane.childNodes.length && !shellDirty) {
+      if (tab === "thread" && chatOpen) {
+        var hostKeep = pane.querySelector("[data-composer-host]");
+        if (hostKeep && !hostKeep.querySelector("#" + COMPOSER_ID)) renderComposer("CHAT");
+      }
+      return;
+    }
+    lastMiddleRenderKey = key;
+    var existingComposerText = "";
+    var prevTa = getComposerTextarea();
+    if (prevTa) existingComposerText = prevTa.value || "";
     pane.innerHTML = "";
-    Object.assign(pane.style, { position: "relative" });
-
-    var header = document.createElement("div");
-    Object.assign(header.style, {
-      display: "flex",
-      alignItems: "center",
-      gap: "10px",
-      padding: "12px 14px",
-      borderBottom: "1px solid " + THEME.border,
-      flexShrink: "0"
-    });
-    var hTitle = document.createElement("div");
-    hTitle.textContent = meta.name || scrapeActiveThreadTitle() || "Profile";
-    Object.assign(hTitle.style, {
-      flex: "1",
-      fontWeight: "650",
-      fontSize: "15px",
-      color: THEME.text,
-      fontFamily: "-apple-system, system-ui, sans-serif",
-      whiteSpace: "nowrap",
-      overflow: "hidden",
-      textOverflow: "ellipsis"
-    });
-    header.appendChild(hTitle);
-    header.appendChild(
-      makeBtn("Save", cmdFavoriteProfile, {
-        color: THEME.gold,
-        compact: true,
-        bold: true
-      })
-    );
-    pane.appendChild(header);
-
-    var scroll = document.createElement("div");
-    Object.assign(scroll.style, {
-      flex: "1",
-      overflow: "auto",
-      padding: "14px",
-      minHeight: "0"
-    });
-
-    if (meta.photos.length) {
-      var gallery = document.createElement("div");
-      Object.assign(gallery.style, {
-        display: "grid",
-        gridTemplateColumns: meta.photos.length > 1 ? "1fr 1fr" : "1fr",
-        gap: "8px",
-        marginBottom: "14px"
-      });
-      meta.photos.slice(0, 6).forEach(function (src) {
-        var img = document.createElement("img");
-        img.src = src;
-        Object.assign(img.style, {
-          width: "100%",
-          aspectRatio: "1",
-          objectFit: "cover",
-          borderRadius: "12px",
-          border: "1px solid " + THEME.border,
-          background: "rgba(255,255,255,0.03)"
-        });
-        gallery.appendChild(img);
-      });
-      scroll.appendChild(gallery);
+    var tabs = document.createElement("div");
+    tabs.className = "sniffies-pane-header sniffies-chrome";
+    tabs.style.gap = "6px";
+    var profilesTab = makeBtn("Profiles", function () {
+      setMiddleTab("profiles");
+      setRailFocus("profiles");
+      renderShell(resolveViewState());
+    }, { compact: true, color: tab === "profiles" ? THEME.accent : THEME.textDim });
+    var chatTab = makeBtn("Chat", function () {
+      setMiddleTab("thread");
+      setRailFocus("chats");
+      renderShell(resolveViewState());
+    }, { compact: true, color: tab === "thread" ? THEME.accent : THEME.textDim });
+    footerTone(profilesTab, tab === "profiles", THEME.textDim);
+    footerTone(chatTab, tab === "thread", THEME.textDim);
+    tabs.appendChild(profilesTab);
+    tabs.appendChild(chatTab);
+    pane.appendChild(tabs);
+    if (tab === "profiles") {
+      var scroll = document.createElement("div");
+      scroll.className = "sniffies-pane-scroll";
+      fillProfilesBody(scroll);
+      pane.appendChild(scroll);
+      pane.appendChild(buildProfilesFooter());
+      hideComposer();
     } else {
-      var noPic = document.createElement("div");
-      noPic.textContent = "Open the native profile to load photos.";
-      Object.assign(noPic.style, {
-        color: THEME.textMute,
-        fontSize: "13px",
-        marginBottom: "12px"
-      });
-      scroll.appendChild(noPic);
+      var body = document.createElement("div");
+      body.className = "sniffies-pane-scroll";
+      renderThreadBody(body);
+      pane.appendChild(body);
+      if (chatOpen) {
+        var composerHost = document.createElement("div");
+        composerHost.className = "sniffies-chrome";
+        composerHost.setAttribute("data-composer-host", "1");
+        composerHost.style.flexShrink = "0";
+        pane.appendChild(composerHost);
+        renderComposerIntoHost(composerHost, existingComposerText);
+      } else {
+        hideComposer();
+        var foot = makePaneFooter();
+        foot.appendChild(makeBtn("Pick a chat →", function () {
+          setRailFocus("chats");
+          cmdOpenChats();
+        }, { compact: true, color: THEME.accent }));
+        pane.appendChild(foot);
+      }
     }
-
-    if (meta.distance) {
-      var dist = document.createElement("div");
-      dist.textContent = meta.distance;
-      Object.assign(dist.style, {
-        color: THEME.textDim,
-        fontSize: "12px",
-        marginBottom: "8px"
-      });
-      scroll.appendChild(dist);
-    }
-
-    if (meta.bio) {
-      var bio = document.createElement("div");
-      bio.textContent = meta.bio;
-      Object.assign(bio.style, {
-        color: THEME.textDim,
-        fontSize: "13px",
-        lineHeight: "1.45",
-        marginBottom: "14px"
-      });
-      scroll.appendChild(bio);
-    }
-
-    var notesLabel = document.createElement("div");
-    notesLabel.textContent = "Notes";
-    Object.assign(notesLabel.style, {
-      color: THEME.textMute,
-      fontSize: "11px",
-      fontWeight: "600",
-      letterSpacing: "0.08em",
-      textTransform: "uppercase",
-      marginBottom: "8px"
-    });
-    scroll.appendChild(notesLabel);
-
-    var noteTa = document.createElement("textarea");
-    noteTa.placeholder = "Private notes (saved locally)…";
-    noteTa.value = getNote(userKey);
-    Object.assign(noteTa.style, {
-      width: "100%",
-      minHeight: "110px",
-      resize: "vertical",
-      padding: "10px 12px",
-      borderRadius: "12px",
-      border: "1px solid " + THEME.border,
-      background: "rgba(255,255,255,0.03)",
-      color: THEME.text,
-      fontSize: "13px",
-      fontFamily: "-apple-system, system-ui, sans-serif",
-      boxSizing: "border-box",
-      outline: "none"
-    });
-    noteTa.onblur = function () {
-      setNote(userKey, noteTa.value);
-    };
-    scroll.appendChild(noteTa);
-
-    if (qs(SEL.profile) && isVisible(qs(SEL.profile))) {
-      var chatBtn = makeBtn("Open Chat", cmdStartChat, {
-        bg: THEME.accentBg,
-        color: "#fff",
-        bold: true,
-        primary: true
-      });
-      chatBtn.style.width = "100%";
-      chatBtn.style.marginTop = "14px";
-      scroll.appendChild(chatBtn);
-    }
-
-    pane.appendChild(scroll);
   }
+
+  function ensureLeftPane() { return ensureMapPane(); }
+  function ensureMessenger() { return ensureThreadPane(); }
+  function ensureProfilePanel() { return ensureProfilesPane(); }
+  function renderLeftPane(force) { renderMapPane(force); }
+  function renderMessenger(force) { renderThreadPane(force); }
+  function renderProfilePanel(force) { renderProfilesPane(force); }
 
   function injectNativeProfileSave() {
     var profile = qs(SEL.profile);
@@ -2493,28 +2671,12 @@
     }
     if (existing && profile.contains(existing)) return;
     if (existing) existing.remove();
-
-    if (getComputedStyle(profile).position === "static") {
-      profile.style.position = "relative";
-    }
-    var btn = makeBtn("Save", cmdFavoriteProfile, {
-      color: THEME.gold,
-      compact: true,
-      bold: true
-    });
+    if (getComputedStyle(profile).position === "static") profile.style.position = "relative";
+    var btn = makeBtn("Save", cmdFavoriteProfile, { color: THEME.gold, compact: true, bold: true });
     btn.id = PROFILE_SAVE_ID;
-    Object.assign(btn.style, {
-      position: "absolute",
-      top: "12px",
-      right: "12px",
-      zIndex: "1000001"
-    });
+    Object.assign(btn.style, { position: "absolute", top: "12px", right: "12px", zIndex: "1000001" });
     profile.appendChild(btn);
   }
-
-  // ============================================================
-  // SHELL
-  // ============================================================
 
   function ensureShell() {
     ensureSplitStyles();
@@ -2523,9 +2685,12 @@
     shell = document.createElement("div");
     shell.id = SHELL_ID;
     document.body.appendChild(shell);
-    ensureLeftPane();
-    ensureMessenger();
-    ensureProfilePanel();
+    ensureRail();
+    ensureMapPane();
+    ensureProfilesPane();
+    ensureThreadPane();
+    ensureChatsPane();
+    ensureMiddlePane();
     return shell;
   }
 
@@ -2533,30 +2698,21 @@
     var shell = document.getElementById(SHELL_ID);
     if (shell) shell.style.display = "none";
     document.body.classList.remove(
-      "sniffies-split-on",
-      "sniffies-split-wide",
-      "sniffies-split-chat",
-      "sniffies-left-map",
-      "sniffies-left-grid"
+      "sniffies-split-on", "sniffies-split-wide", "sniffies-split-narrow",
+      "sniffies-split-chat", "sniffies-left-map", "sniffies-left-grid"
     );
     var embedded = document.getElementById(COMPOSER_ID);
-    if (embedded && embedded.getAttribute("data-split-embedded") === "1") {
-      embedded.remove();
-    }
-  }
-
-  function applyPaneBox(el, box, opts) {
-    if (!el) return;
-    opts = opts || {};
-    if (!box || box.width < 40 || box.height < 40) {
-      el.style.display = "none";
-      return;
-    }
-    el.style.display = opts.display || "flex";
-    el.style.left = box.left + "px";
-    el.style.top = box.top + "px";
-    el.style.width = box.width + "px";
-    el.style.height = box.height + "px";
+    if (embedded && embedded.getAttribute("data-split-embedded") === "1") embedded.remove();
+    lastMapRenderKey = "";
+    lastProfilesRenderKey = "";
+    lastThreadRenderKey = "";
+    lastChatsRenderKey = "";
+    lastRailRenderKey = "";
+    lastMiddleRenderKey = "";
+    lastLeftRenderKey = "";
+    lastMessengerKey = "";
+    lastProfileKey = "";
+    lastLayoutKey = "";
   }
 
   function renderShell(state) {
@@ -2566,87 +2722,36 @@
       destroyShell();
       return;
     }
-
-    // Native Sniffies already splits map | chat list — open it if needed
-    if (!isChatListOpen() && !isChatThreadOpen()) {
-      cmdOpenChats();
-    }
+    if (!isChatListOpen() && !isChatThreadOpen()) cmdOpenChats();
 
     var layout = measureNativeLayout();
     document.documentElement.style.setProperty("--sniffies-bar-h", layout.barH + "px");
 
     var shell = ensureShell();
-    shell.style.display = "block";
+    shell.style.display = "grid";
+    var wide = isWideViewport();
     document.body.classList.add("sniffies-split-on");
-    document.body.classList.toggle("sniffies-split-wide", isWideViewport());
-    document.body.classList.toggle("sniffies-split-chat", isChatThreadOpen() || !!layout.profile);
-
-    var left = ensureLeftPane();
-    var messenger = ensureMessenger();
-    var profilePane = ensureProfilePanel();
-
-    // Map column = whatever Sniffies already carved out
-    if (getLeftMode() === "grid") {
-      applyPaneBox(left, layout.map || layout.chat, { display: "flex" });
-    } else {
-      applyPaneBox(left, layout.map, { display: "block" });
-    }
-
-    // Messenger docks to the native chat list column (not an invented half-screen)
-    var chatBox = layout.chat;
-    if (!chatBox && layout.map) {
-      // Fallback: left strip before mapFrame
-      chatBox = {
-        left: 0,
-        top: layout.map.top,
-        width: Math.max(280, layout.map.left || 360),
-        height: layout.map.height
-      };
-    }
-    if (chatBox && layout.lower) {
-      // Keep above lower nav + our bar
-      var maxBottom = Math.min(chatBox.bottom, layout.lower.top);
-      chatBox = {
-        left: chatBox.left,
-        top: chatBox.top,
-        width: chatBox.width,
-        height: Math.max(120, maxBottom - chatBox.top),
-        bottom: maxBottom,
-        right: chatBox.left + chatBox.width
-      };
-    }
-    applyPaneBox(messenger, chatBox, { display: "flex" });
-
-    if (shouldShowThirdPanel() && layout.profile) {
-      applyPaneBox(profilePane, layout.profile, { display: "flex" });
-    } else if (shouldShowThirdPanel() && layout.map && chatBox) {
-      // Sit on the right third when profile host isn't separately measurable
-      var third = {
-        left: Math.round(chatBox.left + chatBox.width),
-        top: chatBox.top,
-        width: Math.round(Math.min(420, Math.max(260, (layout.map.width || 800) * 0.35))),
-        height: chatBox.height
-      };
-      applyPaneBox(profilePane, third, { display: "flex" });
-    } else {
-      profilePane.style.display = "none";
-    }
+    document.body.classList.toggle("sniffies-split-wide", wide);
+    document.body.classList.toggle("sniffies-split-narrow", !wide);
+    document.body.classList.toggle("sniffies-split-chat", isChatThreadOpen());
 
     var layoutKey =
-      (chatBox ? chatBox.left + "x" + chatBox.width : "0") +
-      ":" +
-      (layout.map ? layout.map.left + "x" + layout.map.width : "0") +
-      ":" +
-      resolveViewState() +
-      ":" +
-      getLeftMode();
+      (wide ? "w" : "n") + ":" + getRailFocus() + ":" + getMiddleTab() + ":" +
+      resolveViewState() + ":" + messengerMode + ":" + chatsFilter + ":" +
+      (isChatThreadOpen() ? "chat" : "list") + ":" + (layout.map ? layout.map.width : 0);
 
-    renderLeftPane();
-    if (layoutKey !== lastLayoutKey || shellDirty) {
-      renderMessenger();
-      renderProfilePanel();
-      lastLayoutKey = layoutKey;
+    var force = shellDirty || layoutKey !== lastLayoutKey;
+    renderRail(force);
+    renderMapPane(force);
+    if (wide) {
+      renderProfilesPane(force);
+      renderThreadPane(force);
+      ensureMiddlePane().innerHTML = "";
+    } else {
+      renderMiddlePane(force);
     }
+    renderChatsPane(force);
+    lastLayoutKey = layoutKey;
     shellDirty = false;
   }
 
@@ -2745,15 +2850,20 @@
     try {
       if (cmd === "split") toggleSplitView();
       else if (cmd === "map") {
-        if (isSplitEnabled()) toggleLeftMode("map");
-        else cmdGoToMap();
+        if (isSplitEnabled()) {
+          setRailFocus("map");
+          renderShell(resolveViewState());
+        } else cmdGoToMap();
       } else if (cmd === "grid") {
-        if (isSplitEnabled()) toggleLeftMode("grid");
-        else cmdNativeMapLayers();
+        if (isSplitEnabled()) {
+          setRailFocus("profiles");
+          renderShell(resolveViewState());
+        } else cmdNativeMapLayers();
       } else if (cmd === "chats") {
         messengerMode = "chats";
         cmdOpenChats();
         if (isSplitEnabled()) {
+          setRailFocus("chats");
           shellDirty = true;
           renderShell(resolveViewState());
         }
@@ -2854,7 +2964,7 @@
       bar.setAttribute("data-view", state || "MAP");
 
       var splitOn = isSplitEnabled();
-      var leftMode = getLeftMode();
+      var railFocus = getRailFocus();
       var btns = {};
       qsa("[data-cmd]", bar).forEach(function (b) {
         btns[b.getAttribute("data-cmd")] = b;
@@ -2865,12 +2975,16 @@
 
       setBtnTone(
         btns.map,
-        splitOn ? leftMode === "map" : state === "MAP",
+        splitOn ? railFocus === "map" : state === "MAP",
         THEME.textDim
       );
-      setBtnTone(btns.grid, splitOn && leftMode === "grid", THEME.textDim);
-      setBtnTone(btns.chats, state === "CHATS_LIST" || state === "CHAT", THEME.text);
+      setBtnTone(btns.grid, splitOn && railFocus === "profiles", THEME.textDim);
+      setBtnTone(btns.chats, state === "CHATS_LIST" || state === "CHAT" || railFocus === "chats", THEME.text);
 
+      // When Split is on, each pane owns its footer — slim the global bar
+      if (btns.map) btns.map.style.display = splitOn ? "none" : "";
+      if (btns.grid) btns.grid.style.display = splitOn ? "none" : "";
+      if (btns.chats) btns.chats.style.display = splitOn ? "none" : "";
       if (btns.pinned) btns.pinned.style.display = splitOn ? "none" : "";
       if (btns.saved) {
         btns.saved.style.display = splitOn ? "none" : "";
@@ -2903,7 +3017,8 @@
     var lastState = null;
     var lastSplit = null;
     var lastWide = null;
-    var lastLeft = null;
+    var lastRail = null;
+    var lastMiddle = null;
     var lastChat = null;
     var scheduled = false;
     var renderLockUntil = 0;
@@ -2916,14 +3031,16 @@
         var state = resolveViewState();
         var splitOn = isSplitEnabled();
         var wide = isWideViewport();
-        var left = getLeftMode();
+        var rail = getRailFocus();
+        var middle = getMiddleTab();
         var chat = isChatThreadOpen();
 
         var changed =
           state !== lastState ||
           splitOn !== lastSplit ||
           wide !== lastWide ||
-          left !== lastLeft ||
+          rail !== lastRail ||
+          middle !== lastMiddle ||
           chat !== lastChat ||
           shellDirty ||
           !document.getElementById(BAR_ID) ||
@@ -2934,13 +3051,13 @@
           lastState = state;
           lastSplit = splitOn;
           lastWide = wide;
-          lastLeft = left;
+          lastRail = rail;
+          lastMiddle = middle;
           lastChat = chat;
           shellDirty = false;
         } else {
           updateSplitFab();
           if (splitOn) {
-            // Re-dock to live DOM geometry (chat list width changes)
             renderShell(state);
             if (chat) setComposerTakeover(true);
           } else if (state === "CHAT") {
@@ -3000,11 +3117,13 @@
       refreshAiSuggestions: refreshAiSuggestions,
       isSplitEnabled: isSplitEnabled,
       getLeftMode: getLeftMode,
+      getRailFocus: getRailFocus,
+      getMiddleTab: getMiddleTab,
       toggleSplitView: toggleSplitView,
       SEL: SEL
     };
 
-    console.log("[Sniffies] Intent Bar 5.2.0 — DOM-adaptive Split");
+    console.log("[Sniffies] Intent Bar 6.0.0 — Four-pane Split shell");
   }
 
   if (document.body) boot();

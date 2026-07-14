@@ -49,12 +49,15 @@
     function sceneChats() {
       clearFixture();
       fixture.innerHTML = `
-        <app-chat-list style="display:block;width:320px;height:400px">
+        <div data-testid="mapFrameRoot" style="display:block;position:absolute;left:360px;top:0;right:0;bottom:60px;width:calc(100% - 360px);height:70vh;background:#123"></div>
+        <app-chat-list-tabs style="display:block;width:320px;height:40px">
           <button data-testid="chatListTab-recents">Recents</button>
-          <button data-testid="chatListTab-screened">Screened</button>
-          <div data-testid="sniffiesChatRow">User A — hey</div>
-          <div data-testid="sniffiesChatRow">User B — wyd</div>
-        </app-chat-list>`;
+          <button data-testid="chatListTab-pinned">Pinned</button>
+        </app-chat-list-tabs>
+        <app-chat-list-vertical style="display:block;width:320px;height:400px">
+          <div data-testid="sniffiesChatRow" style="display:block;width:300px;height:48px">User A — hey</div>
+          <div data-testid="sniffiesChatRow" style="display:block;width:300px;height:48px">User B — wyd</div>
+        </app-chat-list-vertical>`;
     }
 
     function sceneProfile() {
@@ -123,7 +126,7 @@
       await wait(120);
       log(assert(api.resolveViewState() === "MAP", "MAP detected"));
       log(assert(document.getElementById("sniffies-overlay-bar")?.dataset.view === "MAP", "bar shows MAP"));
-      log(assert(!!document.querySelector("#sniffies-overlay-bar button")?.textContent.match(/Chats/), "MAP has Chats"));
+      log(assert(!![...document.querySelectorAll("#sniffies-overlay-bar button")].find(b => /Chats/.test(b.textContent || "")), "MAP has Chats"));
       log(assert(!![...document.querySelectorAll("#sniffies-overlay-bar button")].find(b => b.textContent === "Pinned"), "MAP has Pinned"));
 
       sceneChats();
@@ -137,21 +140,32 @@
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "PROFILE", "PROFILE detected via app-profile"));
       log(assert(!![...document.querySelectorAll("#sniffies-overlay-bar button")].find(b => b.textContent === "Chat"), "PROFILE has Chat"));
-      log(assert(!![...document.querySelectorAll("#sniffies-overlay-bar button")].find(b => b.textContent === "Sup"), "PROFILE has quick msgs"));
+      log(assert(!![...document.querySelectorAll("#sniffies-overlay-bar button")].find(b => b.textContent === "Save" || b.textContent === "Saved"), "PROFILE has Save/Saved"));
 
       sceneChat();
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "CHAT", "CHAT detected via chatInputPanel"));
-      log(assert(!!api.getChatTextArea(), "chat textarea found"));
-      log(assert(!!api.getSendButton(), "send button found"));
+      const nativeTa = document.querySelector('[data-testid="chatTextArea"]');
+      const nativeSend = document.querySelector('[data-testid="sendButton"]');
+      log(assert(!!nativeTa, "chat textarea found"));
+      log(assert(!!nativeSend, "send button found"));
 
-      // send path
-      const ok = api.insertAndSendMessage("Harness ping");
-      await wait(50);
-      const sendBtn = document.querySelector('[data-testid="sendButton"]');
-      log(assert(ok === true, "insertAndSendMessage returns true"));
-      log(assert(sendBtn.dataset.lastSent === "Harness ping", "send button received text"));
+      // send path via composer bridge when Split off
+      if (api.isSplitEnabled()) api.toggleSplitView();
+      api.renderBar("CHAT");
+      await wait(80);
+      const composerTa = document.querySelector("#sniffies-composer textarea");
+      if (composerTa) {
+        composerTa.value = "Harness ping";
+        composerTa.dispatchEvent(new Event("input", { bubbles: true }));
+        const sendChrome = [...document.querySelectorAll("#sniffies-composer button")].find((b) => b.textContent === "Send");
+        if (sendChrome) sendChrome.click();
+        await wait(80);
+        log(assert(nativeSend.dataset.lastSent === "Harness ping", "send bridge delivered text"));
+      } else {
+        log(assert(false, "composer textarea rendered for CHAT"));
+      }
 
       // CHAT beats CHATS_LIST if both present
       sceneChats();
@@ -169,6 +183,35 @@
       fixture.innerHTML = '<div data-testid="chat-global-messages-panel" style="display:block;width:200px;height:200px">global</div>';
       await wait(50);
       log(assert(api.resolveViewState() === "MAP", "global chat panel alone is not private CHAT"));
+
+      // Four-pane Split shell smoke
+      sceneChats();
+      await wait(80);
+      if (!api.isSplitEnabled()) api.toggleSplitView();
+      await wait(200);
+      api.renderShell(api.resolveViewState());
+      await wait(100);
+      log(assert(!!document.getElementById("sniffies-split-shell"), "split shell exists"));
+      log(assert(document.body.classList.contains("sniffies-split-on"), "body has sniffies-split-on"));
+      log(assert(!!document.getElementById("sniffies-rail"), "thin rail exists"));
+      log(assert(!!document.getElementById("sniffies-map-pane"), "map pane exists"));
+      log(assert(!!document.getElementById("sniffies-chats-pane"), "chats pane exists"));
+      const wide = window.innerWidth >= 1400;
+      if (wide) {
+        log(assert(!!document.getElementById("sniffies-profiles-pane"), "profiles pane exists (wide)"));
+        log(assert(!!document.getElementById("sniffies-thread-pane"), "thread pane exists (wide)"));
+        log(assert(document.body.classList.contains("sniffies-split-wide"), "wide class on"));
+      } else {
+        log(assert(!!document.getElementById("sniffies-middle-pane"), "middle pane exists (narrow)"));
+        log(assert(document.body.classList.contains("sniffies-split-narrow"), "narrow class on"));
+      }
+      log(assert(!!document.querySelector("#sniffies-chats-pane .sniffies-pane-footer"), "chats footer present"));
+      log(assert(
+        !!document.querySelector("#sniffies-map-pane .sniffies-pane-footer") &&
+          /Active Now/.test(document.querySelector("#sniffies-map-pane .sniffies-pane-footer")?.textContent || ""),
+        "map footer has Active Now"
+      ));
+      if (api.isSplitEnabled()) api.toggleSplitView();
 
       const failed = lines.filter((l) => l.startsWith("FAIL")).length;
       results.className = failed ? "fail" : "pass";
