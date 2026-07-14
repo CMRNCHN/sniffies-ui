@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (Mac)
-// @version      6.0.0
+// @version      6.0.1
 // @description  Four-pane Split shell — Map | Profiles | Active Chat | All Chats
 // @match        https://sniffies.com/*
 // @match        https://www.sniffies.com/*
@@ -36,7 +36,7 @@
   var SPLIT_STYLE_ID = "sniffies-split-styles";
   var PROFILE_SAVE_ID = "sniffies-profile-save-btn";
   var SPLIT_FAB_ID = "sniffies-split-fab";
-  var WIDE_BREAKPOINT = 1400;
+  var WIDE_BREAKPOINT = 1100;
   var RAIL_W = 52;
 
   var DEFAULTS = {
@@ -443,9 +443,7 @@
       el.textContent = value;
     } else {
       var proto =
-        el.tagName === "TEXTAREA"
-          ? window.HTMLTextAreaElement.prototype
-          : window.HTMLInputElement.prototype;
+        el.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
       var desc = Object.getOwnPropertyDescriptor(proto, "value");
       if (desc && desc.set) desc.set.call(el, value);
       else el.value = value;
@@ -682,11 +680,7 @@
         left: "50%",
         transform: "translateX(-50%) translateY(8px)",
         background:
-          kind === "error"
-            ? THEME.danger
-            : kind === "success"
-              ? THEME.green
-              : "rgba(20,24,32,0.94)",
+          kind === "error" ? THEME.danger : kind === "success" ? THEME.green : "rgba(20,24,32,0.94)",
         color: "#fff",
         padding: "10px 16px",
         borderRadius: "999px",
@@ -1480,9 +1474,8 @@
     aiWrap.appendChild(aiHead);
 
     var aiRow = makeChipRow();
-    var suggestions = aiSuggestionsCache.length
-      ? aiSuggestionsCache
-      : localAiSuggestions(getRecentChatTexts());
+    var suggestions =
+      aiSuggestionsCache.length ? aiSuggestionsCache : localAiSuggestions(getRecentChatTexts());
     if (aiLoading && !suggestions.length) {
       var loading = document.createElement("div");
       loading.textContent = "…";
@@ -1889,12 +1882,12 @@
   function ensureSplitStyles() {
     var existing = document.getElementById(SPLIT_STYLE_ID);
     if (existing) {
-      if (existing.getAttribute("data-v") === "6.0.0") return;
+      if (existing.getAttribute("data-v") === "6.0.1") return;
       existing.remove();
     }
     var style = document.createElement("style");
     style.id = SPLIT_STYLE_ID;
-    style.setAttribute("data-v", "6.0.0");
+    style.setAttribute("data-v", "6.0.1");
     style.textContent =
       "@keyframes sniffies-ai-shimmer {" +
       "  0% { background-position: 0% 50%; }" +
@@ -1930,45 +1923,56 @@
       "  animation: sniffies-sparkle 3.2s ease-in-out infinite;" +
       "}" +
       "#sniffies-split-shell {" +
-      "  position: fixed;" +
-      "  inset: 0;" +
-      "  bottom: var(--sniffies-bar-h, 58px);" +
-      "  z-index: 999980;" +
+      "  position: fixed !important;" +
+      "  top: 0 !important;" +
+      "  left: 0 !important;" +
+      "  right: 0 !important;" +
+      "  bottom: var(--sniffies-bar-h, 58px) !important;" +
+      "  z-index: 1000008 !important;" +
       "  display: none;" +
-      "  pointer-events: none;" +
       "  box-sizing: border-box;" +
       "  gap: 0;" +
+      "  pointer-events: none;" +
+      "  background: transparent;" +
       "}" +
-      "body.sniffies-split-on #sniffies-split-shell { display: grid; }" +
+      "body.sniffies-split-on #sniffies-split-shell { display: grid !important; }" +
       "body.sniffies-split-wide #sniffies-split-shell {" +
       "  grid-template-columns: " +
       RAIL_W +
-      "px minmax(0, 1.15fr) minmax(220px, 0.9fr) minmax(280px, 1fr) minmax(250px, 0.9fr);" +
-      "  grid-template-areas: 'rail map profiles thread chats';" +
+      "px minmax(180px, 1.1fr) minmax(220px, 0.95fr) minmax(260px, 1fr) minmax(240px, 0.95fr) !important;" +
+      "  grid-template-areas: 'rail map profiles thread chats' !important;" +
       "}" +
       "body.sniffies-split-narrow #sniffies-split-shell {" +
       "  grid-template-columns: " +
       RAIL_W +
-      "px minmax(0, 1.1fr) minmax(280px, 1fr) minmax(240px, 0.85fr);" +
-      "  grid-template-areas: 'rail map middle chats';" +
+      "px minmax(160px, 1fr) minmax(260px, 1.1fr) minmax(220px, 0.9fr) !important;" +
+      "  grid-template-areas: 'rail map middle chats' !important;" +
       "}" +
-      "#" + RAIL_ID + " { grid-area: rail; pointer-events: auto; display: flex; flex-direction: column;" +
-      "  align-items: center; gap: 8px; padding: 12px 6px; background: " + THEME.bgSolid +
-      "; border-right: 1px solid " + THEME.border + "; }" +
-      "#" + MAP_PANE_ID + " { grid-area: map; position: relative; overflow: hidden;" +
-      "  background: transparent; pointer-events: none; }" +
-      "#" + PROFILES_PANE_ID + " { grid-area: profiles; pointer-events: auto; display: flex; flex-direction: column;" +
-      "  background: " + THEME.bgPane + "; border-right: 1px solid " + THEME.border + "; min-width: 0; overflow: hidden; }" +
-      "#" + THREAD_PANE_ID + " { grid-area: thread; pointer-events: auto; display: flex; flex-direction: column;" +
-      "  background: " + THEME.bgPane + "; border-right: 1px solid " + THEME.border + "; min-width: 0; overflow: hidden; }" +
-      "#" + CHATS_PANE_ID + " { grid-area: chats; pointer-events: auto; display: flex; flex-direction: column;" +
-      "  background: " + THEME.bgPane + "; min-width: 0; overflow: hidden; }" +
-      "#" + MIDDLE_PANE_ID + " { grid-area: middle; pointer-events: auto; display: none; flex-direction: column;" +
-      "  background: " + THEME.bgPane + "; border-right: 1px solid " + THEME.border + "; min-width: 0; overflow: hidden; }" +
-      "body.sniffies-split-narrow #" + MIDDLE_PANE_ID + " { display: flex; }" +
+      "#" + RAIL_ID + " { grid-area: rail !important; pointer-events: auto !important; display: flex !important;" +
+      "  flex-direction: column; align-items: center; gap: 8px; padding: 12px 6px;" +
+      "  background: " + THEME.bgSolid + " !important; border-right: 1px solid " + THEME.border + ";" +
+      "  height: 100%; min-height: 0; }" +
+      "#" + MAP_PANE_ID + " { grid-area: map !important; position: relative !important; overflow: hidden;" +
+      "  background: transparent; pointer-events: none; height: 100%; min-height: 0;" +
+      "  border-right: 1px solid " + THEME.border + "; }" +
+      "#" + PROFILES_PANE_ID + " { grid-area: profiles !important; pointer-events: auto !important;" +
+      "  display: flex !important; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
+      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + "; }" +
+      "#" + THREAD_PANE_ID + " { grid-area: thread !important; pointer-events: auto !important;" +
+      "  display: flex !important; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
+      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + "; }" +
+      "#" + CHATS_PANE_ID + " { grid-area: chats !important; pointer-events: auto !important;" +
+      "  display: flex !important; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
+      "  background: " + THEME.bgPane + " !important; }" +
+      "#" + MIDDLE_PANE_ID + " { grid-area: middle !important; pointer-events: auto !important;" +
+      "  display: none; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
+      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + "; }" +
+      "body.sniffies-split-narrow #" + MIDDLE_PANE_ID + " { display: flex !important; }" +
       "body.sniffies-split-narrow #" + PROFILES_PANE_ID + "," +
       "body.sniffies-split-narrow #" + THREAD_PANE_ID + " { display: none !important; }" +
       "body.sniffies-split-wide #" + MIDDLE_PANE_ID + " { display: none !important; }" +
+      "body.sniffies-split-wide #" + PROFILES_PANE_ID + "," +
+      "body.sniffies-split-wide #" + THREAD_PANE_ID + " { display: flex !important; }" +
       ".sniffies-pane-footer {" +
       "  pointer-events: auto !important;" +
       "  display: flex; align-items: center; gap: 6px; padding: 8px 10px;" +
@@ -2037,14 +2041,26 @@
     Object.assign(el.style, { display: "flex", flexDirection: "column", minWidth: "0", overflow: "hidden" });
   }
 
+  function getOrCreateShellEl() {
+    var shell = document.getElementById(SHELL_ID);
+    if (shell) return shell;
+    shell = document.createElement("div");
+    shell.id = SHELL_ID;
+    document.body.appendChild(shell);
+    return shell;
+  }
+
+  function ensurePaneEl(id) {
+    var pane = document.getElementById(id);
+    if (pane) return pane;
+    pane = document.createElement("div");
+    pane.id = id;
+    getOrCreateShellEl().appendChild(pane);
+    return pane;
+  }
+
   function ensureRail() {
-    var shell = ensureShell();
-    var rail = document.getElementById(RAIL_ID);
-    if (rail) return rail;
-    rail = document.createElement("div");
-    rail.id = RAIL_ID;
-    shell.appendChild(rail);
-    return rail;
+    return ensurePaneEl(RAIL_ID);
   }
 
   function renderRail(force) {
@@ -2085,13 +2101,7 @@
   }
 
   function ensureMapPane() {
-    var shell = ensureShell();
-    var pane = document.getElementById(MAP_PANE_ID);
-    if (pane) return pane;
-    pane = document.createElement("div");
-    pane.id = MAP_PANE_ID;
-    shell.appendChild(pane);
-    return pane;
+    return ensurePaneEl(MAP_PANE_ID);
   }
 
   function buildMapPaneFooter() {
@@ -2123,13 +2133,7 @@
   }
 
   function ensureProfilesPane() {
-    var shell = ensureShell();
-    var pane = document.getElementById(PROFILES_PANE_ID);
-    if (pane) return pane;
-    pane = document.createElement("div");
-    pane.id = PROFILES_PANE_ID;
-    shell.appendChild(pane);
-    return pane;
+    return ensurePaneEl(PROFILES_PANE_ID);
   }
 
   function buildProfileCard(card) {
@@ -2240,13 +2244,7 @@
   }
 
   function ensureThreadPane() {
-    var shell = ensureShell();
-    var pane = document.getElementById(THREAD_PANE_ID);
-    if (pane) return pane;
-    pane = document.createElement("div");
-    pane.id = THREAD_PANE_ID;
-    shell.appendChild(pane);
-    return pane;
+    return ensurePaneEl(THREAD_PANE_ID);
   }
 
   function scrapeChatListRows() {
@@ -2382,13 +2380,7 @@
   }
 
   function ensureChatsPane() {
-    var shell = ensureShell();
-    var pane = document.getElementById(CHATS_PANE_ID);
-    if (pane) return pane;
-    pane = document.createElement("div");
-    pane.id = CHATS_PANE_ID;
-    shell.appendChild(pane);
-    return pane;
+    return ensurePaneEl(CHATS_PANE_ID);
   }
 
   function filterChatRows(rows) {
@@ -2425,9 +2417,8 @@
     var rows = filterChatRows(scrapeChatListRows());
     if (!rows.length) {
       var empty = document.createElement("div");
-      empty.textContent = chatsSearchQuery || chatsFilter !== "all"
-        ? "No matching chats."
-        : "Open Chats to load threads, or use Recents / Pinned / Places.";
+      empty.textContent =
+        chatsSearchQuery || chatsFilter !== "all" ? "No matching chats." : "Open Chats to load threads, or use Recents / Pinned / Places.";
       Object.assign(empty.style, { color: THEME.textMute, fontSize: "13px", lineHeight: "1.45" });
       scroll.appendChild(empty);
       return;
@@ -2520,13 +2511,7 @@
   }
 
   function ensureMiddlePane() {
-    var shell = ensureShell();
-    var pane = document.getElementById(MIDDLE_PANE_ID);
-    if (pane) return pane;
-    pane = document.createElement("div");
-    pane.id = MIDDLE_PANE_ID;
-    shell.appendChild(pane);
-    return pane;
+    return ensurePaneEl(MIDDLE_PANE_ID);
   }
 
   function renderComposerIntoHost(host, existingText) {
@@ -2680,11 +2665,7 @@
 
   function ensureShell() {
     ensureSplitStyles();
-    var shell = document.getElementById(SHELL_ID);
-    if (shell) return shell;
-    shell = document.createElement("div");
-    shell.id = SHELL_ID;
-    document.body.appendChild(shell);
+    var shell = getOrCreateShellEl();
     ensureRail();
     ensureMapPane();
     ensureProfilesPane();
@@ -2692,6 +2673,36 @@
     ensureChatsPane();
     ensureMiddlePane();
     return shell;
+  }
+
+  function applyShellGrid(shell, wide) {
+    shell.style.display = "grid";
+    shell.style.position = "fixed";
+    shell.style.top = "0";
+    shell.style.left = "0";
+    shell.style.right = "0";
+    shell.style.bottom = "var(--sniffies-bar-h, 58px)";
+    shell.style.zIndex = "1000008";
+    shell.style.boxSizing = "border-box";
+    shell.style.pointerEvents = "none";
+    if (wide) {
+      shell.style.gridTemplateColumns =
+        RAIL_W + "px minmax(180px, 1.1fr) minmax(220px, 0.95fr) minmax(260px, 1fr) minmax(240px, 0.95fr)";
+      shell.style.gridTemplateAreas = '"rail map profiles thread chats"';
+      ensureProfilesPane().style.display = "flex";
+      ensureThreadPane().style.display = "flex";
+      ensureMiddlePane().style.display = "none";
+    } else {
+      shell.style.gridTemplateColumns =
+        RAIL_W + "px minmax(160px, 1fr) minmax(260px, 1.1fr) minmax(220px, 0.9fr)";
+      shell.style.gridTemplateAreas = '"rail map middle chats"';
+      ensureProfilesPane().style.display = "none";
+      ensureThreadPane().style.display = "none";
+      ensureMiddlePane().style.display = "flex";
+    }
+    ensureRail().style.display = "flex";
+    ensureMapPane().style.display = "block";
+    ensureChatsPane().style.display = "flex";
   }
 
   function destroyShell() {
@@ -2728,12 +2739,12 @@
     document.documentElement.style.setProperty("--sniffies-bar-h", layout.barH + "px");
 
     var shell = ensureShell();
-    shell.style.display = "grid";
     var wide = isWideViewport();
     document.body.classList.add("sniffies-split-on");
     document.body.classList.toggle("sniffies-split-wide", wide);
     document.body.classList.toggle("sniffies-split-narrow", !wide);
     document.body.classList.toggle("sniffies-split-chat", isChatThreadOpen());
+    applyShellGrid(shell, wide);
 
     var layoutKey =
       (wide ? "w" : "n") + ":" + getRailFocus() + ":" + getMiddleTab() + ":" +
@@ -2765,6 +2776,7 @@
     } else {
       cmdOpenChats();
       shellDirty = true;
+      showToast(isWideViewport() ? "Four panes on" : "Three panes on — widen window for Profiles + Chat", "success");
     }
     renderBar(resolveViewState());
   }
@@ -3123,7 +3135,7 @@
       SEL: SEL
     };
 
-    console.log("[Sniffies] Intent Bar 6.0.0 — Four-pane Split shell");
+    console.log("[Sniffies] Intent Bar 6.0.1 — Four-pane Split shell");
   }
 
   if (document.body) boot();
