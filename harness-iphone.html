@@ -160,8 +160,10 @@
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "PROFILE", "PROFILE detected"));
-      const msgBtn = document.querySelector('#sniffies-iphone-bar [data-cmd="chat"]');
-      log(assert(!!msgBtn && msgBtn.style.display !== "none", "PROFILE shows Message icon"));
+      const msgBtn = document.querySelector('#sniffies-iphone-bar [data-cmd="message"]');
+      const msgCta = document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="message"]');
+      log(assert(!!msgBtn, "PROFILE has Message control"));
+      log(assert(!!msgCta && msgCta.closest("[data-profile-row]").style.display !== "none", "PROFILE shows Message CTA row"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
 
       sceneProfileCompose();
@@ -169,12 +171,25 @@
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "PROFILE", "profile+composer is PROFILE not CHAT"));
       log(assert(document.documentElement.getAttribute("data-sniffies-view") === "PROFILE", "html view attr PROFILE"));
-      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="chat"]') &&
-        document.querySelector('#sniffies-iphone-bar [data-cmd="chat"]').style.display !== "none", "profile+composer shows Message"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="message"]'), "profile+composer shows Message CTA"));
       log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="send"]') &&
         document.querySelector('#sniffies-iphone-bar [data-cmd="send"]').style.display !== "none", "profile+composer shows Send"));
       log(assert(!document.getElementById("sniffies-iphone-composer") ||
         document.getElementById("sniffies-iphone-composer").style.display === "none", "no composer takeover on profile"));
+
+      // Message CTA clicks native Message (not Chats list)
+      let nativeMsg = false;
+      const native = document.querySelector('app-profile button[aria-label="Message"]');
+      // profile compose scene may not have Message button — use sceneProfile for click test
+      sceneProfile();
+      await wait(80);
+      api.renderBar("PROFILE");
+      await wait(40);
+      const nMsg = document.querySelector('app-profile button[aria-label="Message"]');
+      if (nMsg) nMsg.addEventListener("click", () => { nativeMsg = true; }, { once: true });
+      document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="message"]').click();
+      await wait(80);
+      log(assert(nativeMsg, "Message CTA triggers native Message, not Chats"));
 
       sceneChat();
       await wait(120);

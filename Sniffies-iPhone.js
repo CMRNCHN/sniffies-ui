@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.5
+// @version      1.0.6
 // @description  Mobile nav + quick message bar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.0.5";
+  var VERSION = "1.0.6";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -44,7 +44,7 @@
     chats: { glyph: "\uD83D\uDCAC", label: "Chats" },
     pinned: { glyph: "\uD83D\uDCCC", label: "Pinned" },
     favorites: { glyph: "\u2665", label: "Favorites" },
-    chat: { glyph: "\u2709", label: "Message" },
+    message: { glyph: "\u2709", label: "Message" },
     send: { glyph: "\u27A4", label: "Send" },
     back: { glyph: "\u2190", label: "Back" },
     settings: { glyph: "\u2699", label: "Settings" }
@@ -1156,40 +1156,83 @@
   }
 
   function getProfileChatButton() {
-    var profile = qs(SEL.profile);
-    if (!profile) return null;
-    var candidates = qsa('button, [role="button"], a', profile);
-    for (var i = 0; i < candidates.length; i++) {
-      var el = candidates[i];
-      if (isOurUi(el) || !isVisible(el)) continue;
-      var label = ((el.getAttribute("aria-label") || "") + " " + (el.textContent || ""))
-        .toLowerCase()
-        .trim();
-      if (label.indexOf("message") !== -1 || label.indexOf("chat") !== -1) return el;
+    var profile = findProfileHost() || qs(SEL.profile);
+    var roots = [profile, document.body].filter(Boolean);
+    var i;
+    for (var r = 0; r < roots.length; r++) {
+      var candidates = qsa('button, [role="button"], a', roots[r]);
+      for (i = 0; i < candidates.length; i++) {
+        var el = candidates[i];
+        if (isOurUi(el) || !isVisible(el)) continue;
+        var label = (
+          (el.getAttribute("aria-label") || "") +
+          " " +
+          (el.getAttribute("data-testid") || "") +
+          " " +
+          (el.textContent || "")
+        )
+          .toLowerCase()
+          .trim();
+        if (
+          label.indexOf("message") !== -1 ||
+          label.indexOf("send message") !== -1 ||
+          /(^|\s)chat(\s|$)/.test(label)
+        ) {
+          // Prefer profile-local buttons over chat-list / global chat
+          if (profile && profile.contains(el)) return el;
+          if (!profile) return el;
+        }
+      }
+      // Second pass: profile-only matches
+      if (profile) {
+        for (i = 0; i < candidates.length; i++) {
+          var el2 = candidates[i];
+          if (isOurUi(el2) || !isVisible(el2) || !profile.contains(el2)) continue;
+          var blob = (
+            (el2.getAttribute("aria-label") || "") +
+            " " +
+            (el2.getAttribute("data-testid") || "") +
+            " " +
+            (el2.textContent || "")
+          ).toLowerCase();
+          if (blob.indexOf("message") !== -1 || blob.indexOf("chat") !== -1) return el2;
+        }
+      }
     }
     return null;
   }
 
   function cmdStartChat() {
-    // Profile already has an inline Message box — focus it instead of hunting a covered button.
-    if (findProfileHost()) {
-      var native = getNativeChatTextArea();
-      if (native) {
-        try {
-          native.scrollIntoView({ block: "center", behavior: "smooth" });
-        } catch (e) {}
-        native.focus();
-        showToast("Message", "success");
-        return;
-      }
+    // Dedicated "Message this profile" action — never opens the Chats list.
+    var profile = findProfileHost();
+    if (!profile) {
+      showToast("Open a profile first", "error");
+      return;
     }
+
+    // 1) Prefer native Message / Chat control on the profile
     var btn = getProfileChatButton();
     if (btn) {
       try {
         btn.scrollIntoView({ block: "center", behavior: "smooth" });
-      } catch (e2) {}
+      } catch (e) {}
       btn.click();
-    } else showToast("Chat button not found", "error");
+      showToast("Message", "success");
+      return;
+    }
+
+    // 2) Profile already has an inline Message box — focus it
+    var native = getNativeChatTextArea();
+    if (native) {
+      try {
+        native.scrollIntoView({ block: "center", behavior: "smooth" });
+      } catch (e2) {}
+      native.focus();
+      showToast("Type your message", "success");
+      return;
+    }
+
+    showToast("Message control not found", "error");
   }
 
   function getFavoriteButton() {
@@ -1760,7 +1803,7 @@
       else if (cmd === "favorites" || cmd === "saved") {
         if (resolveViewState() === "PROFILE") cmdFavoriteProfile();
         else cmdFavorites();
-      } else if (cmd === "chat") cmdStartChat();
+      } else if (cmd === "message" || cmd === "chat") cmdStartChat();
       else if (cmd === "send") cmdComposerSend();
       else if (cmd === "back") cmdBack();
       else if (cmd === "settings") renderSettingsModal();
@@ -1772,12 +1815,12 @@
 
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "2") return bar;
+    if (bar && bar.getAttribute("data-ready") === "3") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "2");
+    bar.setAttribute("data-ready", "3");
     Object.assign(bar.style, {
       position: "fixed",
       bottom: "0",
@@ -1797,6 +1840,34 @@
       pointerEvents: "auto"
     });
 
+    // Profile-only CTA: Message this cruiser (separate from Chats list)
+    var profileRow = document.createElement("div");
+    profileRow.setAttribute("data-profile-row", "1");
+    Object.assign(profileRow.style, {
+      display: "none",
+      padding: "8px 10px 0",
+      boxSizing: "border-box"
+    });
+    var messageCta = makeBtn("✉  Message", null, {
+      bg: THEME.accentBg,
+      color: "#fff",
+      bold: true,
+      primary: true
+    });
+    messageCta.setAttribute("data-cmd", "message");
+    messageCta.setAttribute("aria-label", "Message this profile");
+    messageCta.title = "Message this profile";
+    Object.assign(messageCta.style, {
+      width: "100%",
+      minHeight: "44px",
+      height: "44px",
+      borderRadius: "12px",
+      fontSize: "15px",
+      letterSpacing: "0.01em"
+    });
+    profileRow.appendChild(messageCta);
+    bar.appendChild(profileRow);
+
     var navRow = makeRow();
     navRow.setAttribute("data-nav-row", "1");
     navRow.style.paddingTop = "6px";
@@ -1808,7 +1879,7 @@
     navRow.appendChild(makeNavIconBtn("chats"));
     navRow.appendChild(makeNavIconBtn("pinned", THEME.gold));
     navRow.appendChild(makeNavIconBtn("favorites", THEME.gold));
-    navRow.appendChild(makeNavIconBtn("chat", THEME.accent));
+    navRow.appendChild(makeNavIconBtn("message", THEME.accent));
     navRow.appendChild(makeNavIconBtn("send", THEME.green));
     navRow.appendChild(makeNavIconBtn("back", THEME.textMute));
     navRow.appendChild(makeNavIconBtn("settings", THEME.textDim));
@@ -1845,9 +1916,17 @@
       bar.setAttribute("data-view", state || "MAP");
       document.documentElement.setAttribute("data-sniffies-view", state || "MAP");
 
+      var profileRow = bar.querySelector("[data-profile-row]");
+      if (profileRow) {
+        profileRow.style.display = state === "PROFILE" ? "block" : "none";
+      }
+
       var btns = {};
       qsa("[data-cmd]", bar).forEach(function (b) {
-        btns[b.getAttribute("data-cmd")] = b;
+        // Prefer the CTA row's message button when collecting; both share data-cmd
+        if (!btns[b.getAttribute("data-cmd")] || b.closest("[data-profile-row]")) {
+          btns[b.getAttribute("data-cmd")] = b;
+        }
       });
 
       setBtnTone(btns.map, state === "MAP", THEME.textDim);
@@ -1857,11 +1936,14 @@
       setBtnTone(btns.back, false, THEME.textMute);
       setBtnTone(btns.settings, false, THEME.textDim);
 
-      // Message = start/focus chat on profile (native Message is often under our bar)
-      if (btns.chat) {
-        btns.chat.style.display = state === "PROFILE" ? "" : "none";
-        setBtnTone(btns.chat, state === "PROFILE", THEME.accent);
-      }
+      // Message = this profile only (separate from Chats list)
+      var messageIcons = qsa('[data-cmd="message"]', bar);
+      messageIcons.forEach(function (b) {
+        if (b.closest("[data-profile-row]")) return; // CTA row toggled above
+        b.style.display = state === "PROFILE" ? "" : "none";
+        setBtnTone(b, state === "PROFILE", THEME.accent);
+      });
+
       // Send = bridge to native send in threads; also on profile when compose box exists
       if (btns.send) {
         var showSend =
