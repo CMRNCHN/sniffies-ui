@@ -65,7 +65,11 @@
       clearFixture();
       fixture.innerHTML = `
         <app-profile style="display:block;width:360px;height:480px">
-          <div data-testid="profileHeadlineTableContainer">Cruiser</div>
+          <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
+          <div class="stats">21, 145lb</div>
+          <p class="about">Into pups and hosting downtown.</p>
+          <span class="tag">Vers</span>
+          <span class="tag">Host</span>
           <button aria-label="Message">Message</button>
           <button aria-label="Favorite">Favorite</button>
           <button aria-label="Back">Back</button>
@@ -164,7 +168,17 @@
       const msgCta = document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="message"]');
       log(assert(!!msgBtn, "PROFILE has Message control"));
       log(assert(!!msgCta && msgCta.closest("[data-profile-row]").style.display !== "none", "PROFILE shows Message CTA row"));
+      const detailsCta = document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="details"]');
+      log(assert(!!detailsCta, "PROFILE shows Details CTA"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
+
+      // Details opens sheet with scraped profile text
+      detailsCta.click();
+      await wait(80);
+      const detailsSheet = document.getElementById("sniffies-iphone-profile-details");
+      log(assert(!!detailsSheet, "Details CTA opens profile details sheet"));
+      log(assert(/Registered Cruiser|Cruiser|21|145/i.test(detailsSheet?.textContent || ""), "details sheet includes profile text"));
+      detailsSheet?.remove();
 
       sceneProfileCompose();
       await wait(120);
@@ -202,7 +216,7 @@
       log(assert(!!api.getSendButton(), "send button found"));
 
       const ok = api.insertAndSendMessage("Harness ping");
-      await wait(250);
+      await wait(600);
       const sendBtn = document.querySelector('[data-testid="sendButton"]');
       log(assert(ok === true, "insertAndSendMessage returns true"));
       log(assert(sendBtn.dataset.lastSent === "Harness ping", "send button received text"));

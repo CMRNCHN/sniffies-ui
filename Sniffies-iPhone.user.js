@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.6
+// @version      1.0.7
 // @description  Mobile nav + quick message bar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.0.6";
+  var VERSION = "1.0.7";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -36,6 +36,7 @@
   var BAR_ID = "sniffies-iphone-bar";
   var COMPOSER_ID = "sniffies-iphone-composer";
   var SETTINGS_ID = "sniffies-iphone-settings";
+  var DETAILS_ID = "sniffies-iphone-profile-details";
   var TOAST_ID = "sniffies-iphone-toast";
   var HIDE_STYLE_ID = "sniffies-iphone-hide-native";
 
@@ -45,6 +46,7 @@
     pinned: { glyph: "\uD83D\uDCCC", label: "Pinned" },
     favorites: { glyph: "\u2665", label: "Favorites" },
     message: { glyph: "\u2709", label: "Message" },
+    details: { glyph: "\u2139", label: "Details" },
     send: { glyph: "\u27A4", label: "Send" },
     back: { glyph: "\u2190", label: "Back" },
     settings: { glyph: "\u2699", label: "Settings" }
@@ -239,7 +241,7 @@
   }
 
   function ourUiIds() {
-    return [BAR_ID, COMPOSER_ID, SETTINGS_ID, TOAST_ID];
+    return [BAR_ID, COMPOSER_ID, SETTINGS_ID, DETAILS_ID, TOAST_ID];
   }
 
   function isOurUi(el) {
@@ -249,7 +251,12 @@
       var node = document.getElementById(ids[i]);
       if (node && (node === el || node.contains(el))) return true;
     }
-    if (el.closest && el.closest("#" + BAR_ID + ", #" + COMPOSER_ID + ", #" + SETTINGS_ID)) {
+    if (
+      el.closest &&
+      el.closest(
+        "#" + BAR_ID + ", #" + COMPOSER_ID + ", #" + SETTINGS_ID + ", #" + DETAILS_ID
+      )
+    ) {
       return true;
     }
     return false;
@@ -733,11 +740,12 @@
   function sameChatFingerprint(a, b) {
     if (!a || !b) return false;
     if (a.path !== b.path) return false;
-    if (a.title && b.title && a.title !== b.title) return false;
-    // Prefer same textarea node when still attached
+    if (!!a.profile !== !!b.profile) return false;
+    // Prefer the same textarea node — title text changes as the user types
     if (a.input && b.input && a.input.isConnected && b.input.isConnected) {
       return a.input === b.input;
     }
+    if (a.title && b.title && a.title !== b.title) return false;
     return true;
   }
 
@@ -1235,6 +1243,219 @@
     showToast("Message control not found", "error");
   }
 
+  function scrapeProfileDetails() {
+    var profile = findProfileHost() || qs(SEL.profile);
+    if (!profile) return { title: "Profile", lines: [] };
+
+    var lines = [];
+    var seen = {};
+
+    function addLine(text, weight) {
+      text = stripControls(text).replace(/\s+/g, " ").trim();
+      if (!text || text.length < 2 || text.length > 400) return;
+      var key = text.toLowerCase();
+      if (seen[key]) return;
+      // Skip obvious chrome / our UI / single icon glyphs
+      if (/^(message|send|back|close|favorite|pin|chat|map|saved)$/i.test(text)) return;
+      seen[key] = true;
+      lines.push({ text: text, weight: weight || 0 });
+    }
+
+    var headline =
+      qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
+      qs('[data-testid*="profileHeadline"]', profile) ||
+      qs('[data-testid*="Headline"]', profile);
+    if (headline) addLine(headline.textContent, 10);
+
+    var titleBits = qsa("h1, h2, h3, [class*='headline'], [class*='title']", profile);
+    for (var t = 0; t < titleBits.length; t++) addLine(titleBits[t].textContent, 8);
+
+    // Stats / chips / tags often sit under the photo (covered by our bar)
+    var chips = qsa(
+      '[class*="tag"], [class*="chip"], [class*="badge"], [class*="stat"], [class*="trait"], [role="listitem"]',
+      profile
+    );
+    for (var c = 0; c < chips.length; c++) {
+      if (isOurUi(chips[c])) continue;
+      addLine(chips[c].textContent, 5);
+    }
+
+    var paras = qsa("p, li, [class*='about'], [class*='bio'], [class*='description'], td, th", profile);
+    for (var p = 0; p < paras.length; p++) {
+      if (isOurUi(paras[p])) continue;
+      addLine(paras[p].textContent, 3);
+    }
+
+    // Last resort: split visible text blocks
+    if (lines.length < 2) {
+      var raw = stripControls(profile.innerText || profile.textContent || "")
+        .split(/\n+/)
+        .map(function (s) {
+          return s.replace(/\s+/g, " ").trim();
+        });
+      for (var i = 0; i < raw.length; i++) addLine(raw[i], 1);
+    }
+
+    lines.sort(function (a, b) {
+      return b.weight - a.weight;
+    });
+
+    var title = lines.length ? lines[0].text : "Profile details";
+    var body = lines
+      .slice(title === (lines[0] && lines[0].text) ? 1 : 0)
+      .map(function (l) {
+        return l.text;
+      })
+      .filter(function (t, idx, arr) {
+        return arr.indexOf(t) === idx;
+      })
+      .slice(0, 40);
+
+    return { title: title.slice(0, 80), lines: body };
+  }
+
+  function scrollProfileDetailsIntoView() {
+    var profile = findProfileHost();
+    if (!profile) return;
+    var candidates = qsa(
+      '[class*="about"], [class*="bio"], [class*="detail"], [class*="stats"], [class*="tag"], [data-testid*="profile"]',
+      profile
+    );
+    var target = null;
+    for (var i = candidates.length - 1; i >= 0; i--) {
+      if (!isOurUi(candidates[i]) && isVisible(candidates[i])) {
+        target = candidates[i];
+        break;
+      }
+    }
+    if (!target) target = profile;
+    try {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    } catch (e) {}
+  }
+
+  function renderProfileDetailsModal() {
+    closeModals();
+    var data = scrapeProfileDetails();
+    scrollProfileDetailsIntoView();
+
+    var overlay = document.createElement("div");
+    overlay.id = DETAILS_ID;
+    Object.assign(overlay.style, {
+      position: "fixed",
+      inset: "0",
+      background: "rgba(0,0,0,0.55)",
+      zIndex: "1000004",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "center",
+      paddingBottom: "env(safe-area-inset-bottom, 0px)"
+    });
+    overlay.onclick = function (e) {
+      if (e.target === overlay) overlay.remove();
+    };
+
+    var sheet = document.createElement("div");
+    Object.assign(sheet.style, {
+      background: THEME.bgSolid,
+      border: "1px solid " + THEME.border,
+      borderRadius: "18px 18px 0 0",
+      padding: "18px 16px 28px",
+      width: "100%",
+      maxHeight: "78vh",
+      overflowY: "auto",
+      color: THEME.text,
+      fontFamily: "-apple-system, system-ui, sans-serif",
+      boxShadow: "0 -12px 40px rgba(0,0,0,0.45)",
+      boxSizing: "border-box"
+    });
+
+    var title = document.createElement("div");
+    title.textContent = data.title || "Profile details";
+    Object.assign(title.style, {
+      fontWeight: "650",
+      fontSize: "18px",
+      marginBottom: "6px",
+      lineHeight: "1.3"
+    });
+    sheet.appendChild(title);
+
+    var hint = document.createElement("div");
+    hint.textContent = "Pulled from the open profile (details often sit under the bar).";
+    Object.assign(hint.style, {
+      color: THEME.textMute,
+      fontSize: "12px",
+      marginBottom: "14px",
+      lineHeight: "1.4"
+    });
+    sheet.appendChild(hint);
+
+    if (!data.lines.length) {
+      var empty = document.createElement("div");
+      empty.textContent = "Couldn't read extra details — try scrolling the profile, then open Details again.";
+      Object.assign(empty.style, {
+        color: THEME.textDim,
+        fontSize: "14px",
+        lineHeight: "1.45",
+        marginBottom: "12px"
+      });
+      sheet.appendChild(empty);
+    } else {
+      data.lines.forEach(function (line) {
+        var row = document.createElement("div");
+        row.textContent = line;
+        Object.assign(row.style, {
+          fontSize: "14px",
+          lineHeight: "1.45",
+          padding: "10px 0",
+          borderBottom: "1px solid " + THEME.border,
+          color: THEME.text
+        });
+        sheet.appendChild(row);
+      });
+    }
+
+    var actions = document.createElement("div");
+    Object.assign(actions.style, {
+      display: "flex",
+      gap: "8px",
+      marginTop: "16px"
+    });
+    var msgBtn = makeBtn(
+      "✉  Message",
+      function () {
+        overlay.remove();
+        cmdStartChat();
+      },
+      { bg: THEME.accentBg, color: "#fff", bold: true, primary: true }
+    );
+    msgBtn.style.flex = "1";
+    msgBtn.style.minHeight = "44px";
+    var done = makeBtn(
+      "Done",
+      function () {
+        overlay.remove();
+      },
+      { color: THEME.textDim }
+    );
+    done.style.flex = "1";
+    done.style.minHeight = "44px";
+    actions.appendChild(msgBtn);
+    actions.appendChild(done);
+    sheet.appendChild(actions);
+
+    overlay.appendChild(sheet);
+    document.body.appendChild(overlay);
+  }
+
+  function cmdShowProfileDetails() {
+    if (!findProfileHost()) {
+      showToast("Open a profile first", "error");
+      return;
+    }
+    renderProfileDetailsModal();
+  }
+
   function getFavoriteButton() {
     var profile = qs(SEL.profile);
     if (!profile) return null;
@@ -1574,6 +1795,8 @@
   function closeModals() {
     var s = document.getElementById(SETTINGS_ID);
     if (s) s.remove();
+    var d = document.getElementById(DETAILS_ID);
+    if (d) d.remove();
   }
 
   function makeToggle(initial, onChange) {
@@ -1804,6 +2027,7 @@
         if (resolveViewState() === "PROFILE") cmdFavoriteProfile();
         else cmdFavorites();
       } else if (cmd === "message" || cmd === "chat") cmdStartChat();
+      else if (cmd === "details") cmdShowProfileDetails();
       else if (cmd === "send") cmdComposerSend();
       else if (cmd === "back") cmdBack();
       else if (cmd === "settings") renderSettingsModal();
@@ -1815,12 +2039,12 @@
 
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "3") return bar;
+    if (bar && bar.getAttribute("data-ready") === "4") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "3");
+    bar.setAttribute("data-ready", "4");
     Object.assign(bar.style, {
       position: "fixed",
       bottom: "0",
@@ -1840,14 +2064,32 @@
       pointerEvents: "auto"
     });
 
-    // Profile-only CTA: Message this cruiser (separate from Chats list)
+    // Profile-only CTAs above the icon row (native details/message often under the bar)
     var profileRow = document.createElement("div");
     profileRow.setAttribute("data-profile-row", "1");
     Object.assign(profileRow.style, {
       display: "none",
       padding: "8px 10px 0",
-      boxSizing: "border-box"
+      boxSizing: "border-box",
+      gap: "8px",
+      flexDirection: "row"
     });
+
+    var detailsCta = makeBtn("ⓘ  Details", null, {
+      color: THEME.text,
+      bold: true
+    });
+    detailsCta.setAttribute("data-cmd", "details");
+    detailsCta.setAttribute("aria-label", "Profile details");
+    detailsCta.title = "Profile details";
+    Object.assign(detailsCta.style, {
+      flex: "1",
+      minHeight: "44px",
+      height: "44px",
+      borderRadius: "12px",
+      fontSize: "15px"
+    });
+
     var messageCta = makeBtn("✉  Message", null, {
       bg: THEME.accentBg,
       color: "#fff",
@@ -1858,13 +2100,15 @@
     messageCta.setAttribute("aria-label", "Message this profile");
     messageCta.title = "Message this profile";
     Object.assign(messageCta.style, {
-      width: "100%",
+      flex: "1",
       minHeight: "44px",
       height: "44px",
       borderRadius: "12px",
       fontSize: "15px",
       letterSpacing: "0.01em"
     });
+
+    profileRow.appendChild(detailsCta);
     profileRow.appendChild(messageCta);
     bar.appendChild(profileRow);
 
@@ -1918,7 +2162,7 @@
 
       var profileRow = bar.querySelector("[data-profile-row]");
       if (profileRow) {
-        profileRow.style.display = state === "PROFILE" ? "block" : "none";
+        profileRow.style.display = state === "PROFILE" ? "flex" : "none";
       }
 
       var btns = {};
