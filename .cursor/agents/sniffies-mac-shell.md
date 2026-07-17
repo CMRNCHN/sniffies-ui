@@ -18,10 +18,10 @@ You own the **Mac** Split shell in this repo — four-pane layout (Map | Browse 
 
 ## Target layout
 
-- **Wide (≥ ~1400px) + Split on:** `rail | map | profiles | thread | chats`
+- **Wide (≥ ~1100px) + Split on:** `rail | map | profiles | thread | chats`
 - **Narrow + Split on:** `rail | map | middle(Profiles|Chat tabs) | chats`
-- Map column: transparent pass-through over live map (`mapFrameRoot` / measure); pointer events reach the map except our footer chrome
-- Other columns: opaque our UI; cover native visually only where we own the region — **never** `opacity:0` chat list / map / profile hosts
+- Map column: **live Mapbox resized** into `#sniffies-map-pane` via `--sniffies-map-*` + `.sniffies-map-contained` (hole-punch; never `opacity:0` the map)
+- Other columns: solid opaque our UI (`THEME.bgPane`); native chat list / profile / thread chrome **parked off-screen** while Split is on (keep box size for scrape/click bridges)
 - Thin rail: Map / Messages (chats) / Profile (profiles focus)
 
 ## DOM rules (hard lessons)
@@ -30,7 +30,9 @@ You own the **Mac** Split shell in this repo — four-pane layout (Map | Browse 
 - Prefer visible hosts: `mapFrameRoot`, `chatInputPanel`, `sniffiesChatRow`, `chatButtonIcon` (**not** the global/generic “chat” control)
 - Stable chrome: **poll**, do not MutationObserver-thrash or wipe the bottom bar with `innerHTML` on every tick
 - Park native composer (`opacity` / off-screen) **only** while our bridged composer footer is active (`body.sniffies-composer-takeover`)
+- While Split on, park competing native chrome with fixed off-screen boxes — **not** `opacity:0` on list/map/profile hosts
 - Send messages via native composer bridge (`sendViaNative`), not a fake transport
+- Use `isScrapeable` for chat rows when Split parks them off-screen
 
 ## Debugging
 

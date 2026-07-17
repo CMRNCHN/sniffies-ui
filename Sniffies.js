@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (Mac)
-// @version      6.0.1
-// @description  Four-pane Split shell — Map | Profiles | Active Chat | All Chats
+// @version      6.1.1
+// @description  Four-pane Split — map hole-punch, parked native chrome, chat cache
 // @match        https://sniffies.com/*
 // @match        https://www.sniffies.com/*
 // @run-at       document-end
@@ -58,7 +58,7 @@
   var THEME = {
     bg: "rgba(10, 14, 20, 0.94)",
     bgSolid: "#0a0e14",
-    bgPane: "rgba(8, 11, 16, 0.97)",
+    bgPane: "#080b10",
     border: "rgba(255,255,255,0.08)",
     borderHover: "rgba(255,255,255,0.16)",
     text: "#f2f4f8",
@@ -115,6 +115,11 @@
   var lastMessengerKey = "";
   var lastProfileKey = "";
   var PANE_FOOTER_H = 48;
+  var lastMapContainKey = "";
+  var mapResizeTimer = null;
+  var cachedChatSnapshots = [];
+  var chatHydrateTimer = null;
+  var lastMapDismissAt = 0;
 
   // ============================================================
   // STORAGE
@@ -274,6 +279,21 @@
     return true;
   }
 
+  /** Rows parked off-screen for Split still scrape/click; skip on-screen visibility. */
+  function isScrapeable(el) {
+    if (!el || isOurUi(el)) return false;
+    if (isVisible(el)) return true;
+    if (!isSplitEnabled()) return false;
+    try {
+      var cs = window.getComputedStyle(el);
+      if (cs.display === "none") return false;
+    } catch (e) {
+      return false;
+    }
+    var r = el.getBoundingClientRect();
+    return r.width >= 2 && r.height >= 2;
+  }
+
   function qs(selector, root) {
     try {
       return (root || document).querySelector(selector);
@@ -357,6 +377,21 @@
     // app-chat-list itself is typically 0×0 — use vertical/tabs/rows
     var host = firstVisible(SEL.chatListHost);
     if (host) return host;
+    // Split parks hosts off-screen; still treat them as present
+    if (isSplitEnabled()) {
+      var parked =
+        qs("app-chat-list-vertical") ||
+        qs("app-chat-list-horizontal") ||
+        qs("app-chat-list-tabs") ||
+        qs(SEL.chatListRow);
+      if (parked && isScrapeable(parked)) {
+        return (
+          parked.closest(
+            "app-chat-list-vertical, app-chat-list-horizontal, app-chat-list-tabs, .list-container"
+          ) || parked
+        );
+      }
+    }
     var row = firstVisible(SEL.chatListRow);
     if (row) {
       return (
@@ -459,6 +494,7 @@
   function isChatListOpen() {
     if (findChatListHost()) return true;
     if (firstVisible(SEL.chatListRow) || firstVisible(SEL.chatListTab)) return true;
+    if (isSplitEnabled() && (qs(SEL.chatListRow) || qs(SEL.chatListTab))) return true;
     var t = titleHint();
     return t.indexOf("chat list") !== -1 || /\/chat\/?$/.test(location.pathname || "");
   }
@@ -730,11 +766,16 @@
   // ============================================================
 
   function ensureHideNativeStyle() {
-    if (document.getElementById(HIDE_STYLE_ID)) return;
+    var existing = document.getElementById(HIDE_STYLE_ID);
+    if (existing) {
+      if (existing.getAttribute("data-v") === "6.1.1") return;
+      existing.remove();
+    }
     var style = document.createElement("style");
     style.id = HIDE_STYLE_ID;
+    style.setAttribute("data-v", "6.1.1");
     style.textContent =
-      /* Only park the native composer while ours is bridged — never hide chat list / map / profile hosts */
+      /* Park native composer while ours is bridged */
       "body.sniffies-composer-takeover [data-testid='chatInputPanel']," +
       "body.sniffies-composer-takeover #chat-input-panel," +
       "body.sniffies-composer-takeover app-chat-input {" +
@@ -745,6 +786,91 @@
       "  height: 1px !important;" +
       "  width: 1px !important;" +
       "  overflow: hidden !important;" +
+      "}" +
+      /* Split: park competing native chrome off-screen (keep box for scrape) */ +
+      "body.sniffies-split-on app-chat-list," +
+      "body.sniffies-split-on app-chat-list-vertical," +
+      "body.sniffies-split-on app-chat-list-horizontal," +
+      "body.sniffies-split-on app-chat-list-tabs," +
+      "body.sniffies-split-on app-chat-list-recents," +
+      "body.sniffies-split-on app-chat-list .list-container," +
+      "body.sniffies-split-on app-chat-list .chat-grouping," +
+      "body.sniffies-split-on app-messenger," +
+      "body.sniffies-split-on app-inbox," +
+      "body.sniffies-split-on app-private-chat," +
+      "body.sniffies-split-on app-chat-thread," +
+      "body.sniffies-split-on [data-testid='privateChat']," +
+      "body.sniffies-split-on [data-testid='chatThread']," +
+      "body.sniffies-split-on app-nav-lower-container," +
+      "body.sniffies-split-on .sniffies-parked-overlay {" +
+      "  position: fixed !important;" +
+      "  left: -12000px !important;" +
+      "  top: 0 !important;" +
+      "  width: 420px !important;" +
+      "  height: 85vh !important;" +
+      "  max-height: 85vh !important;" +
+      "  overflow: auto !important;" +
+      "  pointer-events: none !important;" +
+      "  z-index: 0 !important;" +
+      "  margin: 0 !important;" +
+      "  transform: none !important;" +
+      "  opacity: 1 !important;" +
+      "  visibility: visible !important;" +
+      "}" +
+      /* Native profile visible only when we explicitly allow (View / Say Hi) */ +
+      "body.sniffies-split-on:not(.sniffies-allow-native-profile) app-profile {" +
+      "  position: fixed !important;" +
+      "  left: -12000px !important;" +
+      "  top: 0 !important;" +
+      "  width: 420px !important;" +
+      "  height: 85vh !important;" +
+      "  pointer-events: none !important;" +
+      "  z-index: 0 !important;" +
+      "  opacity: 1 !important;" +
+      "  visibility: visible !important;" +
+      "}" +
+      "body.sniffies-split-on.sniffies-allow-native-profile app-profile {" +
+      "  position: fixed !important;" +
+      "  left: var(--sniffies-profiles-left, 40%) !important;" +
+      "  top: var(--sniffies-profiles-top, 0px) !important;" +
+      "  width: var(--sniffies-profiles-width, 28vw) !important;" +
+      "  height: var(--sniffies-profiles-height, 80vh) !important;" +
+      "  right: auto !important;" +
+      "  bottom: auto !important;" +
+      "  z-index: 1000012 !important;" +
+      "  pointer-events: auto !important;" +
+      "  overflow: auto !important;" +
+      "  background: " + THEME.bgPane + " !important;" +
+      "}" +
+      /* Live map resized into Map column hole */ +
+      "body.sniffies-split-on .sniffies-map-contained," +
+      "body.sniffies-split-on [data-testid='mapFrameRoot'].sniffies-map-contained," +
+      "body.sniffies-split-on mgl-map.sniffies-map-contained," +
+      "body.sniffies-split-on [data-testid='mainMap'].sniffies-map-contained," +
+      "body.sniffies-split-on .mapboxgl-map.sniffies-map-contained {" +
+      "  position: fixed !important;" +
+      "  left: var(--sniffies-map-left, 52px) !important;" +
+      "  top: var(--sniffies-map-top, 0px) !important;" +
+      "  width: var(--sniffies-map-width, 40vw) !important;" +
+      "  height: var(--sniffies-map-height, 80vh) !important;" +
+      "  right: auto !important;" +
+      "  bottom: auto !important;" +
+      "  max-width: none !important;" +
+      "  max-height: none !important;" +
+      "  margin: 0 !important;" +
+      "  transform: none !important;" +
+      "  z-index: 1000000 !important;" +
+      "  overflow: hidden !important;" +
+      "  pointer-events: auto !important;" +
+      "  opacity: 1 !important;" +
+      "  visibility: visible !important;" +
+      "}" +
+      "body.sniffies-split-on .sniffies-map-contained .mapboxgl-canvas," +
+      "body.sniffies-split-on .sniffies-map-contained canvas," +
+      "body.sniffies-split-on .sniffies-map-contained .mapboxgl-map," +
+      "body.sniffies-split-on .sniffies-map-contained .mapboxgl-canvas-container {" +
+      "  width: 100% !important;" +
+      "  height: 100% !important;" +
       "}" +
       "#" + BAR_ID + "," +
       "#" + BAR_ID + " button," +
@@ -774,6 +900,252 @@
       "  min-height: 80px;" +
       "}";
     document.head.appendChild(style);
+  }
+
+  function setCssRectVars(prefix, rect) {
+    var root = document.documentElement;
+    if (!rect || !(rect.width > 0) || !(rect.height > 0)) {
+      root.style.removeProperty("--" + prefix + "-left");
+      root.style.removeProperty("--" + prefix + "-top");
+      root.style.removeProperty("--" + prefix + "-width");
+      root.style.removeProperty("--" + prefix + "-height");
+      return;
+    }
+    root.style.setProperty("--" + prefix + "-left", Math.round(rect.left) + "px");
+    root.style.setProperty("--" + prefix + "-top", Math.round(rect.top) + "px");
+    root.style.setProperty("--" + prefix + "-width", Math.round(rect.width) + "px");
+    root.style.setProperty("--" + prefix + "-height", Math.round(rect.height) + "px");
+  }
+
+  function findMapContainTarget() {
+    var frame = qs('[data-testid="mapFrameRoot"]');
+    if (frame) {
+      var inner = qs(".mapboxgl-map, mgl-map, canvas", frame);
+      return inner && inner.tagName !== "CANVAS" ? inner : frame;
+    }
+    var main = qs('[data-testid="mainMap"]');
+    if (main) {
+      var innerMain = qs(".mapboxgl-map, mgl-map", main);
+      return innerMain || main;
+    }
+    var mgl = qs("mgl-map");
+    if (mgl) return mgl;
+    var mapbox = qs(".mapboxgl-map");
+    if (mapbox) return mapbox;
+    var container = qs("app-map-container, app-map");
+    if (container) {
+      var innerC = qs(".mapboxgl-map, mgl-map, [data-testid='mapFrameRoot']", container);
+      return innerC || container;
+    }
+    return findMap();
+  }
+
+  function mapPaneRect() {
+    var pane = document.getElementById(MAP_PANE_ID);
+    if (!pane) return null;
+    var rect = pane.getBoundingClientRect();
+    if (!(rect.width > 0) || !(rect.height > 0)) return null;
+    return rect;
+  }
+
+  function rectsOverlap(a, b) {
+    if (!a || !b) return false;
+    return !(a.right <= b.left || a.left >= b.right || a.bottom <= b.top || a.top >= b.bottom);
+  }
+
+  function unmarkParkedOverlays() {
+    qsa(".sniffies-parked-overlay").forEach(function (el) {
+      el.classList.remove("sniffies-parked-overlay");
+    });
+  }
+
+  function parkNativeOverlays() {
+    if (!isSplitEnabled()) {
+      unmarkParkedOverlays();
+      return;
+    }
+    unmarkParkedOverlays();
+    var mapRect = mapPaneRect();
+    if (!mapRect) return;
+    var skip = new Set();
+    skip.add(SHELL_ID);
+    skip.add(BAR_ID);
+    skip.add(SPLIT_FAB_ID);
+    skip.add(MAP_PANE_ID);
+    skip.add(PROFILES_PANE_ID);
+    skip.add(THREAD_PANE_ID);
+    skip.add(CHATS_PANE_ID);
+    skip.add(MIDDLE_PANE_ID);
+    skip.add(RAIL_ID);
+    var mapEl = findMapContainTarget();
+    if (mapEl) skip.add(mapEl.id || "");
+    qsa(
+      "app-chat-list, app-chat-list-vertical, app-chat-list-horizontal, app-chat-list-tabs, " +
+      "app-chat-list-recents, app-messenger, app-inbox, app-private-chat, app-chat-thread, " +
+      "app-profile, [data-testid='privateChat'], [data-testid='chatThread']"
+    ).forEach(function (el) {
+      if (isOurUi(el)) return;
+      skip.add(el.id || "");
+    });
+    var candidates = qsa("body > *");
+    for (var i = 0; i < candidates.length; i++) {
+      var el = candidates[i];
+      if (!el || isOurUi(el)) continue;
+      if (el.id && skip.has(el.id)) continue;
+      if (el.id === SHELL_ID || el.id === BAR_ID || el.id === SPLIT_FAB_ID) continue;
+      if (el.closest && el.closest("#" + SHELL_ID + ", #" + BAR_ID + ", #" + SPLIT_FAB_ID)) continue;
+      if (mapEl && (el === mapEl || el.contains(mapEl))) continue;
+      var r = el.getBoundingClientRect();
+      if (r.width < 80 || r.height < 80) continue;
+      if (!rectsOverlap(r, mapRect)) continue;
+      var tag = (el.tagName || "").toLowerCase();
+      if (tag === "script" || tag === "style" || tag === "link" || tag === "meta") continue;
+      el.classList.add("sniffies-parked-overlay");
+    }
+  }
+
+  function setNativeProfileAllowed(on) {
+    if (on) document.body.classList.add("sniffies-allow-native-profile");
+    else document.body.classList.remove("sniffies-allow-native-profile");
+  }
+
+  function shouldShowNativeChat() {
+    if (!isSplitEnabled()) return true;
+    return getRailFocus() === "chats" || getMiddleTab() === "thread";
+  }
+
+  function shouldShowNativeThread() {
+    if (!isSplitEnabled()) return true;
+    return isChatThreadOpen() && (getRailFocus() === "chats" || getMiddleTab() === "thread");
+  }
+
+  function snapChatRow(row) {
+    if (!row || isOurUi(row)) return null;
+    var text = (row.textContent || "").replace(/\s+/g, " ").trim();
+    if (!text) return null;
+    var img = qs("img", row);
+    var unread =
+      /unread|new/i.test(row.getAttribute("aria-label") || "") ||
+      !!qs('[class*="unread"], [class*="badge"], [data-testid*="unread"]', row) ||
+      /\b\d+\s*unread\b/i.test(text);
+    return {
+      el: row,
+      title: text.slice(0, 60) || "Chat",
+      avatar: img ? img.currentSrc || img.src || "" : "",
+      preview: text,
+      unread: unread
+    };
+  }
+
+  function hydrateChatSnapshots() {
+    if (!isSplitEnabled()) return;
+    if (chatHydrateTimer) return;
+    chatHydrateTimer = setTimeout(function () {
+      chatHydrateTimer = null;
+      if (!isSplitEnabled()) return;
+      var hadRows = scrapeChatListRows().length > 0;
+      if (hadRows) {
+        lastChatsRenderKey = "";
+        renderChatsPane(true);
+        return;
+      }
+      if (!shouldShowNativeChat()) {
+        cmdOpenChats();
+        setTimeout(function () {
+          if (!isSplitEnabled()) return;
+          var rows = scrapeChatListRows();
+          if (rows.length) {
+            lastChatsRenderKey = "";
+            renderChatsPane(true);
+            if (getRailFocus() === "map") cmdGoToMap();
+          }
+        }, 280);
+      }
+    }, 400);
+  }
+
+  function ensureNativeChatsLoaded() {
+    if (!isSplitEnabled()) return;
+    if (scrapeChatListRows().length) return;
+    if (isChatListOpen() || isChatThreadOpen()) return;
+    cmdOpenChats();
+    hydrateChatSnapshots();
+  }
+
+  function clearMapContainment() {
+    qsa(".sniffies-map-contained").forEach(function (el) {
+      el.classList.remove("sniffies-map-contained");
+    });
+    unmarkParkedOverlays();
+    setCssRectVars("sniffies-map", null);
+    setCssRectVars("sniffies-profiles", null);
+    lastMapContainKey = "";
+    scheduleMapResize(null);
+  }
+
+  function scheduleMapResize(mapEl) {
+    if (mapResizeTimer) clearTimeout(mapResizeTimer);
+    mapResizeTimer = setTimeout(function () {
+      mapResizeTimer = null;
+      try {
+        window.dispatchEvent(new Event("resize"));
+      } catch (e) {}
+      try {
+        var host = mapEl || findMapContainTarget();
+        if (!host) return;
+        var canvas = host.querySelector && host.querySelector(".mapboxgl-canvas, canvas");
+        var map =
+          host._map ||
+          (host.__mapboxMap) ||
+          (canvas && (canvas._map || canvas.__map)) ||
+          null;
+        if (map && typeof map.resize === "function") map.resize();
+        else if (window.mapboxgl && window.mapboxgl.Map) {
+          // no global instance guaranteed
+        }
+      } catch (err) {}
+    }, 60);
+  }
+
+  function applyMapContainment() {
+    ensureHideNativeStyle();
+    var pane = document.getElementById(MAP_PANE_ID);
+    var mapEl = findMapContainTarget();
+    if (!pane || !mapEl) {
+      clearMapContainment();
+      return false;
+    }
+    var rect = pane.getBoundingClientRect();
+    if (!(rect.width > 40) || !(rect.height > 40)) {
+      clearMapContainment();
+      return false;
+    }
+    var key =
+      Math.round(rect.left) + ":" + Math.round(rect.top) + ":" +
+      Math.round(rect.width) + ":" + Math.round(rect.height);
+    setCssRectVars("sniffies-map", rect);
+    qsa(".sniffies-map-contained").forEach(function (el) {
+      if (el !== mapEl) el.classList.remove("sniffies-map-contained");
+    });
+    mapEl.classList.add("sniffies-map-contained");
+    parkNativeOverlays();
+    var profPane = document.getElementById(PROFILES_PANE_ID);
+    if (profPane && document.body.classList.contains("sniffies-allow-native-profile")) {
+      setCssRectVars("sniffies-profiles", profPane.getBoundingClientRect());
+    }
+    if (key !== lastMapContainKey) {
+      lastMapContainKey = key;
+      scheduleMapResize(mapEl);
+      try {
+        var hostRect = mapEl.getBoundingClientRect();
+        console.log(
+          "[Sniffies] map contain",
+          "pane=" + Math.round(rect.width) + "x" + Math.round(rect.height) + "@" + Math.round(rect.left),
+          "host=" + Math.round(hostRect.width) + "x" + Math.round(hostRect.height) + "@" + Math.round(hostRect.left)
+        );
+      } catch (e) {}
+    }
+    return true;
   }
 
   function setComposerTakeover(on) {
@@ -925,6 +1297,10 @@
       btn.click();
       return true;
     }
+    if (isSplitEnabled()) {
+      showToast("Chat list loading in background…", "error");
+      return false;
+    }
     showToast("Could not open chats", "error");
     return false;
   }
@@ -933,19 +1309,35 @@
     var state = resolveViewState();
     if (state === "CHATS_LIST" || state === "CHAT") {
       var btn = getChatListNav();
-      if (btn) btn.click();
-    }
-    var profile = qs(SEL.profile);
-    if (profile && isVisible(profile)) {
-      var back = findBackButton(profile);
+      if (btn) {
+        btn.click();
+        return;
+      }
+      var back = findBackButton(document);
       if (back) back.click();
     }
+    var profile = qs(SEL.profile);
+    if (profile && (isVisible(profile) || isScrapeable(profile))) {
+      var profileBack = findBackButton(profile);
+      if (profileBack) profileBack.click();
+    }
+    setNativeProfileAllowed(false);
   }
 
   function cmdGoToMap() {
-    var state = resolveViewState();
-    if (state === "MAP") return;
+    if (!isSplitEnabled()) {
+      cmdClosePanels();
+      return;
+    }
+    setRailFocus("map");
+    setNativeProfileAllowed(false);
     cmdClosePanels();
+    shellDirty = true;
+    setTimeout(function () {
+      if (!isSplitEnabled()) return;
+      applyMapContainment();
+      renderShell(resolveViewState());
+    }, 200);
   }
 
   function cmdNativeMapLayers() {
@@ -979,7 +1371,7 @@
     var tabs = qsa(SEL.chatListTab);
     for (var i = 0; i < tabs.length; i++) {
       var tab = tabs[i];
-      if (!isVisible(tab) && tab.getBoundingClientRect().width === 0) continue;
+      if (!isScrapeable(tab) && tab.getBoundingClientRect().width === 0) continue;
       var blob = (
         (tab.getAttribute("data-testid") || "") +
         " " +
@@ -1222,6 +1614,7 @@
         (m.getAttribute("aria-label") || m.getAttribute("title") || (img && img.alt) || "")
           .replace(/\s+/g, " ")
           .trim();
+      if (/^this is you$/i.test(label)) return;
       pushCard(m, avatar, label, "");
     });
 
@@ -1231,11 +1624,15 @@
         if (isOurUi(img)) return;
         var r = img.getBoundingClientRect();
         if (r.width < 28 || r.width > 96 || r.height < 28 || r.height > 96) return;
-        if (r.top < 40 || r.bottom > window.innerHeight - 80) return;
+        if (isSplitEnabled()) {
+          var mapRect = mapPaneRect();
+          if (!mapRect || !rectsOverlap(r, mapRect)) return;
+        } else if (r.top < 40 || r.bottom > window.innerHeight - 80) return;
         var src = img.currentSrc || img.src || "";
         if (!src || src.indexOf("data:") === 0) return;
         var parent = img.closest("button, a, [role='button'], .mapboxgl-marker") || img;
         var name = (img.alt || parent.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim();
+        if (/^this is you$/i.test(name)) return;
         pushCard(parent, src, name, "");
       });
     }
@@ -1247,12 +1644,15 @@
   function openMarkerCard(card) {
     if (!card || !card.el) return;
     try {
+      setNativeProfileAllowed(true);
       card.el.click();
       shellDirty = true;
       setTimeout(function () {
+        applyMapContainment();
         renderShell(resolveViewState());
       }, 250);
     } catch (e) {
+      setNativeProfileAllowed(false);
       showToast("Couldn't open profile", "error");
     }
   }
@@ -1882,12 +2282,12 @@
   function ensureSplitStyles() {
     var existing = document.getElementById(SPLIT_STYLE_ID);
     if (existing) {
-      if (existing.getAttribute("data-v") === "6.0.1") return;
+      if (existing.getAttribute("data-v") === "6.1.1") return;
       existing.remove();
     }
     var style = document.createElement("style");
     style.id = SPLIT_STYLE_ID;
-    style.setAttribute("data-v", "6.0.1");
+    style.setAttribute("data-v", "6.1.1");
     style.textContent =
       "@keyframes sniffies-ai-shimmer {" +
       "  0% { background-position: 0% 50%; }" +
@@ -1932,6 +2332,8 @@
       "  display: none;" +
       "  box-sizing: border-box;" +
       "  gap: 0;" +
+      "  column-gap: 0;" +
+      "  row-gap: 0;" +
       "  pointer-events: none;" +
       "  background: transparent;" +
       "}" +
@@ -1951,22 +2353,25 @@
       "#" + RAIL_ID + " { grid-area: rail !important; pointer-events: auto !important; display: flex !important;" +
       "  flex-direction: column; align-items: center; gap: 8px; padding: 12px 6px;" +
       "  background: " + THEME.bgSolid + " !important; border-right: 1px solid " + THEME.border + ";" +
-      "  height: 100%; min-height: 0; }" +
+      "  height: 100%; min-height: 0; box-sizing: border-box; }" +
       "#" + MAP_PANE_ID + " { grid-area: map !important; position: relative !important; overflow: hidden;" +
-      "  background: transparent; pointer-events: none; height: 100%; min-height: 0;" +
-      "  border-right: 1px solid " + THEME.border + "; }" +
+      "  background: transparent !important; pointer-events: none; height: 100%; min-height: 0;" +
+      "  border-right: 1px solid " + THEME.border + "; box-sizing: border-box; }" +
       "#" + PROFILES_PANE_ID + " { grid-area: profiles !important; pointer-events: auto !important;" +
       "  display: flex !important; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
-      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + "; }" +
+      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + ";" +
+      "  box-sizing: border-box; opacity: 1 !important; }" +
       "#" + THREAD_PANE_ID + " { grid-area: thread !important; pointer-events: auto !important;" +
       "  display: flex !important; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
-      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + "; }" +
+      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + ";" +
+      "  box-sizing: border-box; opacity: 1 !important; }" +
       "#" + CHATS_PANE_ID + " { grid-area: chats !important; pointer-events: auto !important;" +
       "  display: flex !important; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
-      "  background: " + THEME.bgPane + " !important; }" +
+      "  background: " + THEME.bgPane + " !important; box-sizing: border-box; opacity: 1 !important; }" +
       "#" + MIDDLE_PANE_ID + " { grid-area: middle !important; pointer-events: auto !important;" +
       "  display: none; flex-direction: column; height: 100%; min-height: 0; min-width: 0; overflow: hidden;" +
-      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + "; }" +
+      "  background: " + THEME.bgPane + " !important; border-right: 1px solid " + THEME.border + ";" +
+      "  box-sizing: border-box; opacity: 1 !important; }" +
       "body.sniffies-split-narrow #" + MIDDLE_PANE_ID + " { display: flex !important; }" +
       "body.sniffies-split-narrow #" + PROFILES_PANE_ID + "," +
       "body.sniffies-split-narrow #" + THREAD_PANE_ID + " { display: none !important; }" +
@@ -1979,17 +2384,18 @@
       "  min-height: " + PANE_FOOTER_H + "px; box-sizing: border-box; flex-shrink: 0;" +
       "  border-top: 1px solid " + THEME.border + ";" +
       "  background: " + THEME.bgPane + ";" +
-      "  backdrop-filter: blur(14px) saturate(1.15);" +
-      "  -webkit-backdrop-filter: blur(14px) saturate(1.15);" +
       "}" +
       "#" + MAP_PANE_ID + " .sniffies-pane-footer {" +
       "  position: absolute; left: 0; right: 0; bottom: 0;" +
-      "  background: rgba(8, 11, 16, 0.88);" +
+      "  background: " + THEME.bgSolid + ";" +
+      "  pointer-events: auto !important;" +
       "}" +
-      ".sniffies-pane-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px; }" +
+      ".sniffies-pane-scroll { flex: 1; min-height: 0; overflow: auto; padding: 12px;" +
+      "  background: " + THEME.bgPane + "; }" +
       ".sniffies-pane-header {" +
       "  display: flex; align-items: center; gap: 8px; padding: 10px 12px;" +
       "  border-bottom: 1px solid " + THEME.border + "; flex-shrink: 0;" +
+      "  background: " + THEME.bgPane + ";" +
       "}" +
       ".sniffies-rail-btn {" +
       "  width: 38px; height: 38px; border-radius: 12px;" +
@@ -2087,10 +2493,16 @@
         e.preventDefault();
         e.stopPropagation();
         setRailFocus(focusId);
+        if (focusId === "map") {
+          setNativeProfileAllowed(false);
+          cmdGoToMap();
+          return;
+        }
         if (focusId === "chats") {
           messengerMode = "chats";
           cmdOpenChats();
         }
+        if (focusId === "profiles") setNativeProfileAllowed(false);
         renderShell(resolveViewState());
       });
       return b;
@@ -2195,7 +2607,9 @@
     });
     if (!cards.length) {
       var empty = document.createElement("div");
-      empty.textContent = "No visible map profiles — pan the map.";
+      empty.textContent = isSplitEnabled()
+        ? "No map markers in the Map column — pan/zoom the map, then Refresh."
+        : "No visible map profiles — pan the map.";
       Object.assign(empty.style, {
         color: THEME.textMute, fontSize: "13px", gridColumn: "1 / -1", padding: "18px 4px", lineHeight: "1.4"
       });
@@ -2249,29 +2663,38 @@
 
   function scrapeChatListRows() {
     var rows = [];
+    var seen = {};
     qsa(SEL.chatListRow).forEach(function (row) {
-      if (isOurUi(row) || !isVisible(row)) return;
-      var text = (row.textContent || "").replace(/\s+/g, " ").trim();
-      var img = qs("img", row);
-      var unread =
-        /unread|new/i.test(row.getAttribute("aria-label") || "") ||
-        !!qs('[class*="unread"], [class*="badge"], [data-testid*="unread"]', row) ||
-        /\b\d+\s*unread\b/i.test(text);
-      rows.push({
-        el: row,
-        title: text.slice(0, 60) || "Chat",
-        avatar: img ? img.currentSrc || img.src || "" : "",
-        preview: text,
-        unread: unread
-      });
+      var snap = snapChatRow(row);
+      if (!snap) return;
+      var key = snap.title + "|" + snap.preview.slice(0, 40);
+      if (seen[key]) return;
+      seen[key] = true;
+      rows.push(snap);
     });
-    return rows.slice(0, 60);
+    if (rows.length) {
+      cachedChatSnapshots = rows.slice(0, 60);
+      return cachedChatSnapshots;
+    }
+    return cachedChatSnapshots.slice(0, 60);
   }
 
   function openChatRow(row) {
-    if (!row || !row.el) return;
+    if (!row) return;
+    var target = row.el;
+    if (!target || !document.contains(target)) {
+      qsa(SEL.chatListRow).some(function (r) {
+        var snap = snapChatRow(r);
+        if (snap && snap.title === row.title) {
+          target = r;
+          return true;
+        }
+        return false;
+      });
+    }
+    if (!target) return;
     try {
-      row.el.click();
+      target.click();
       setMiddleTab("thread");
       setRailFocus("chats");
       shellDirty = true;
@@ -2418,7 +2841,11 @@
     if (!rows.length) {
       var empty = document.createElement("div");
       empty.textContent =
-        chatsSearchQuery || chatsFilter !== "all" ? "No matching chats." : "Open Chats to load threads, or use Recents / Pinned / Places.";
+        chatsSearchQuery || chatsFilter !== "all"
+          ? "No matching chats."
+          : cachedChatSnapshots.length
+            ? "Chat cache stale — tap Recents to reload."
+            : "Loading chats… tap Recents if empty.";
       Object.assign(empty.style, { color: THEME.textMute, fontSize: "13px", lineHeight: "1.45" });
       scroll.appendChild(empty);
       return;
@@ -2685,10 +3112,13 @@
     shell.style.zIndex = "1000008";
     shell.style.boxSizing = "border-box";
     shell.style.pointerEvents = "none";
+    shell.style.gap = "0";
     if (wide) {
       shell.style.gridTemplateColumns =
         RAIL_W + "px minmax(180px, 1.1fr) minmax(220px, 0.95fr) minmax(260px, 1fr) minmax(240px, 0.95fr)";
       shell.style.gridTemplateAreas = '"rail map profiles thread chats"';
+      styleOpaquePane(ensureProfilesPane());
+      styleOpaquePane(ensureThreadPane());
       ensureProfilesPane().style.display = "flex";
       ensureThreadPane().style.display = "flex";
       ensureMiddlePane().style.display = "none";
@@ -2698,14 +3128,26 @@
       shell.style.gridTemplateAreas = '"rail map middle chats"';
       ensureProfilesPane().style.display = "none";
       ensureThreadPane().style.display = "none";
+      styleOpaquePane(ensureMiddlePane());
       ensureMiddlePane().style.display = "flex";
     }
     ensureRail().style.display = "flex";
     ensureMapPane().style.display = "block";
+    styleOpaquePane(ensureChatsPane());
     ensureChatsPane().style.display = "flex";
+    ensureProfilesPane().style.background = THEME.bgPane;
+    ensureThreadPane().style.background = THEME.bgPane;
+    ensureChatsPane().style.background = THEME.bgPane;
+    ensureMiddlePane().style.background = THEME.bgPane;
   }
 
   function destroyShell() {
+    clearMapContainment();
+    setNativeProfileAllowed(false);
+    if (chatHydrateTimer) {
+      clearTimeout(chatHydrateTimer);
+      chatHydrateTimer = null;
+    }
     var shell = document.getElementById(SHELL_ID);
     if (shell) shell.style.display = "none";
     document.body.classList.remove(
@@ -2733,7 +3175,16 @@
       destroyShell();
       return;
     }
-    if (!isChatListOpen() && !isChatThreadOpen()) cmdOpenChats();
+    if (getRailFocus() === "map") {
+      var now = Date.now();
+      if (resolveViewState() !== "MAP" && now - lastMapDismissAt > 900) {
+        lastMapDismissAt = now;
+        setNativeProfileAllowed(false);
+        cmdClosePanels();
+      }
+    } else if (!isChatListOpen() && !isChatThreadOpen()) {
+      ensureNativeChatsLoaded();
+    }
 
     var layout = measureNativeLayout();
     document.documentElement.style.setProperty("--sniffies-bar-h", layout.barH + "px");
@@ -2745,11 +3196,13 @@
     document.body.classList.toggle("sniffies-split-narrow", !wide);
     document.body.classList.toggle("sniffies-split-chat", isChatThreadOpen());
     applyShellGrid(shell, wide);
+    // After grid paints, confine live map into the Map column hole
+    applyMapContainment();
 
     var layoutKey =
       (wide ? "w" : "n") + ":" + getRailFocus() + ":" + getMiddleTab() + ":" +
       resolveViewState() + ":" + messengerMode + ":" + chatsFilter + ":" +
-      (isChatThreadOpen() ? "chat" : "list") + ":" + (layout.map ? layout.map.width : 0);
+      (isChatThreadOpen() ? "chat" : "list") + ":" + lastMapContainKey;
 
     var force = shellDirty || layoutKey !== lastLayoutKey;
     renderRail(force);
@@ -2762,6 +3215,7 @@
       renderMiddlePane(force);
     }
     renderChatsPane(force);
+    hydrateChatSnapshots();
     lastLayoutKey = layoutKey;
     shellDirty = false;
   }
@@ -2774,9 +3228,21 @@
       if (isChatThreadOpen()) renderComposer("CHAT");
       else hideComposer();
     } else {
-      cmdOpenChats();
+      ensureNativeChatsLoaded();
       shellDirty = true;
-      showToast(isWideViewport() ? "Four panes on" : "Three panes on — widen window for Profiles + Chat", "success");
+      showToast(
+        isWideViewport()
+          ? "Split on — Map column + Profiles, Chat, All Chats"
+          : "Split on — widen past 1100px for Profiles + Chat columns",
+        "success"
+      );
+      setTimeout(function () {
+        if (!isSplitEnabled()) return;
+        if (getRailFocus() === "map") cmdGoToMap();
+        applyMapContainment();
+        shellDirty = true;
+        renderShell(resolveViewState());
+      }, 320);
     }
     renderBar(resolveViewState());
   }
@@ -3132,10 +3598,13 @@
       getRailFocus: getRailFocus,
       getMiddleTab: getMiddleTab,
       toggleSplitView: toggleSplitView,
+      applyMapContainment: applyMapContainment,
+      scrapeChatListRows: scrapeChatListRows,
+      cmdGoToMap: cmdGoToMap,
       SEL: SEL
     };
 
-    console.log("[Sniffies] Intent Bar 6.0.1 — Four-pane Split shell");
+    console.log("[Sniffies] Intent Bar 6.1.1 — Split owns map hole; chats hydrate in background");
   }
 
   if (document.body) boot();
