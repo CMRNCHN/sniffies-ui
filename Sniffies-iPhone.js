@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.1
+// @version      1.1.2
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.1";
+  var VERSION = "1.1.2";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -47,12 +47,12 @@
     favorites: { icon: "star", label: "Favorites" },
     chats: { icon: "chat", label: "Chats" },
     map: { icon: "map", label: "Map" },
-    settings: { icon: "settings", label: "Settings" },
+    settings: { icon: "sliders", label: "Settings" },
     pinned: { icon: "pin", label: "Pinned" },
     message: { icon: "send", label: "Message" },
     details: { icon: "info", label: "Details" },
     send: { icon: "send", label: "Send" },
-    pics: { icon: "pics", label: "Send pics" },
+    pics: { icon: "photos", label: "Photos" },
     shield: { icon: "block", label: "Block" }
   };
 
@@ -65,16 +65,18 @@
       '<path d="M7 17.25 4.75 19.5V7.75A2.5 2.5 0 0 1 7.25 5.25h9.5A2.5 2.5 0 0 1 19.25 7.75v6.5a2.5 2.5 0 0 1-2.5 2.5H7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>',
     map:
       '<path d="M12 20.5s5.75-4.85 5.75-9.55a5.75 5.75 0 1 0-11.5 0C6.25 15.65 12 20.5 12 20.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="10.7" r="2.1" fill="none" stroke="currentColor" stroke-width="1.7"/>',
-    settings:
-      '<circle cx="12" cy="12" r="2.85" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3.6v1.9M12 18.5v1.9M3.6 12h1.9M18.5 12h1.9M6.05 6.05l1.35 1.35M16.6 16.6l1.35 1.35M17.95 6.05l-1.35 1.35M7.4 16.6l-1.35 1.35" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+    // Cleaner than gear: three horizontal sliders
+    sliders:
+      '<path d="M4.5 7.5h15M4.5 12h15M4.5 16.5h15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="9" cy="7.5" r="1.85" fill="currentColor"/><circle cx="15" cy="12" r="1.85" fill="currentColor"/><circle cx="11" cy="16.5" r="1.85" fill="currentColor"/>',
     pin:
       '<path d="M12 21V11.5M9.2 5.8a3.4 3.4 0 0 1 5.6 0l.9 1.35H8.3L9.2 5.8zM8.3 7.15h7.4v1.6a2.2 2.2 0 0 1-2.2 2.2h-3a2.2 2.2 0 0 1-2.2-2.2v-1.6z" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/>',
     block:
-      '<path d="M12 3.4 19.1 6.6v5.4c0 4.55-2.95 7.85-7.1 9.25-4.15-1.4-7.1-4.7-7.1-9.25V6.6L12 3.4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.2 12h5.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+      '<circle cx="12" cy="12" r="8.1" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M7.1 7.1 16.9 16.9" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"/>',
     info:
       '<circle cx="12" cy="12" r="8.1" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 10.85V16.4M12 7.7h.01" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round"/>',
-    pics:
-      '<rect x="3.8" y="6.6" width="12.2" height="10.6" rx="1.7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.8 14.1 6.9 11l3.1 2.95 2.05-1.7 3.95 3.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="8.1" cy="10" r="1.05" fill="currentColor"/><path d="M14.6 4.8h5.6v5.6" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/><path d="m20.2 4.8-6.3 6.3" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/>',
+    // Stacked photos (gallery) — send-pics wiring comes later
+    photos:
+      '<rect x="7.2" y="5.2" width="11.2" height="9.4" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="4.6" y="8.4" width="11.2" height="9.4" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.6"/>',
     send:
       '<path d="M4.4 11.15 19.6 4.55l-4.05 15.1-3.55-5.55-5.5-1.35 5.35-1.75 1.85-4.85z" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round"/>'
   };
@@ -1226,40 +1228,50 @@
     }
   }
 
-  // Native profile right-rail (shield / star / info / pics / plane)
+  // Native profile right-rail — classify by label, then position (never guess info→gallery)
+  function railLabelFor(el) {
+    return (
+      (el.getAttribute("aria-label") || "") +
+      " " +
+      (el.getAttribute("title") || "") +
+      " " +
+      (el.getAttribute("data-testid") || "") +
+      " " +
+      (el.className && typeof el.className === "string" ? el.className : "") +
+      " " +
+      (el.textContent || "")
+    )
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
   function getProfileActionRail() {
     var profile = findProfileHost() || qs(SEL.profile);
     if (!profile) return [];
     var pr = profile.getBoundingClientRect();
     if (pr.width < 40 || pr.height < 40) return [];
     var items = [];
-    var nodes = qsa('button, [role="button"], a', profile);
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
-      if (isOurUi(el)) continue;
-      var r = el.getBoundingClientRect();
-      if (r.width < 2 || r.height < 2) continue;
-      if (r.width > 84 || r.height > 84) continue;
-      // Right strip of the profile / viewport
-      var onRightHalf = r.left > Math.min(pr.left + pr.width * 0.62, window.innerWidth * 0.58);
-      var nearRightEdge = r.right > pr.right - 72 || r.right > window.innerWidth - 88;
-      if (!onRightHalf && !nearRightEdge) continue;
-      items.push({
-        el: el,
-        top: r.top,
-        label: (
-          (el.getAttribute("aria-label") || "") +
-          " " +
-          (el.getAttribute("title") || "") +
-          " " +
-          (el.getAttribute("data-testid") || "") +
-          " " +
-          (el.textContent || "")
-        )
-          .toLowerCase()
-          .replace(/\s+/g, " ")
-          .trim()
-      });
+    var seen = [];
+    // Profile + document (some rail icons live outside app-profile)
+    var roots = [profile, document.body];
+    for (var ri = 0; ri < roots.length; ri++) {
+      var nodes = qsa('button, [role="button"], a', roots[ri]);
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        if (isOurUi(el) || seen.indexOf(el) !== -1) continue;
+        var r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) continue;
+        if (r.width > 84 || r.height > 84) continue;
+        var nearRightEdge = r.right > window.innerWidth - 96;
+        var onProfileRight =
+          r.left > pr.left + pr.width * 0.58 && r.right > pr.right - 96;
+        if (!nearRightEdge && !onProfileRight) continue;
+        // Stay roughly within the profile vertical band
+        if (r.bottom < pr.top - 20 || r.top > pr.bottom + 20) continue;
+        seen.push(el);
+        items.push({ el: el, top: r.top, label: railLabelFor(el) });
+      }
     }
     items.sort(function (a, b) {
       return a.top - b.top;
@@ -1267,60 +1279,119 @@
     return items;
   }
 
-  function pickProfileRailButton(hints, indexFallback) {
+  function isPhotoish(label) {
+    return /photo|pics?|media|album|gallery|image|camera|share photo|send photo/.test(
+      label
+    );
+  }
+
+  function isMessageish(label) {
+    if (isPhotoish(label)) return false;
+    return (
+      /send message|message cruiser|start (a )?chat|private (chat|message)/.test(label) ||
+      (/\bmessage\b/.test(label) && !/missed|global|list|history/.test(label)) ||
+      /\bpaper[\s-]?plane\b|\bairplane\b|\bdm\b/.test(label)
+    );
+  }
+
+  function classifyProfileRail() {
     var rail = getProfileActionRail();
-    var h, i;
+    var out = {
+      report: null,
+      pin: null,
+      info: null,
+      photos: null,
+      message: null,
+      rail: rail
+    };
+    var used = [];
+    var i;
+
+    function take(el) {
+      if (!el || used.indexOf(el) !== -1) return null;
+      used.push(el);
+      return el;
+    }
+
     for (i = 0; i < rail.length; i++) {
-      for (h = 0; h < hints.length; h++) {
-        if (rail[i].label.indexOf(hints[h]) !== -1) return rail[i].el;
+      var L = rail[i].label;
+      var el = rail[i].el;
+      if (/report|block|flag|shield/.test(L) && !out.report) out.report = take(el);
+      else if (/pin for later|pinned for later|pin later|unpin for later/.test(L) && !out.pin)
+        out.pin = take(el);
+    }
+    for (i = 0; i < rail.length; i++) {
+      L = rail[i].label;
+      el = rail[i].el;
+      if (used.indexOf(el) !== -1) continue;
+      if (isPhotoish(L) && !out.photos) out.photos = take(el);
+      else if (isMessageish(L) && !out.message) out.message = take(el);
+      else if (/\b(info|details?|about)\b/.test(L) && !isPhotoish(L) && !out.info)
+        out.info = take(el);
+      else if (/favorit|bookmark|\bstar\b|\bpin\b/.test(L) && !out.pin) out.pin = take(el);
+    }
+
+    // Position fallbacks when icons are unlabeled (common on Sniffies mobile)
+    // Typical order: report · pin · photos · message  OR  report · pin · info · photos · message
+    if (!out.report && rail[0]) out.report = take(rail[0].el);
+    if (!out.pin && rail[1]) out.pin = take(rail[1].el);
+    if (!out.message) {
+      for (i = rail.length - 1; i >= 0; i--) {
+        if (used.indexOf(rail[i].el) === -1 && !isPhotoish(rail[i].label)) {
+          out.message = take(rail[i].el);
+          break;
+        }
       }
     }
-    if (indexFallback != null && rail[indexFallback]) return rail[indexFallback].el;
-    return null;
-  }
-
-  function findNativeProfileInfoButton() {
-    return pickProfileRailButton(
-      ["info", "detail", "about", "more info", "profile info", "information"],
-      2
-    );
-  }
-
-  function findNativeProfileMessageButton() {
-    return (
-      pickProfileRailButton(["message", "send message", "paper plane", "airplane", "dm"], 4) ||
-      pickProfileRailButton(["send", "plane", "chat"], 4)
-    );
-  }
-
-  function findNativeProfileFavoriteButton() {
-    return pickProfileRailButton(
-      ["favorit", "star", "bookmark", "save", "pin for later", "pin later", "pinned for later", "pin"],
-      1
-    );
-  }
-
-  function findNativeProfilePicsButton() {
-    return (
-      pickProfileRailButton(["photo", "pic", "media", "album", "image", "gallery", "camera"], 3) ||
-      qs(SEL.addMedia)
-    );
-  }
-
-  function findNativeProfileShieldButton() {
-    return pickProfileRailButton(["shield", "report", "block", "safety", "secure"], 0);
+    if (!out.photos) {
+      for (i = 0; i < rail.length; i++) {
+        if (used.indexOf(rail[i].el) === -1 && isPhotoish(rail[i].label)) {
+          out.photos = take(rail[i].el);
+          break;
+        }
+      }
+      // Second-to-last unlabeled control is often photos when message is last
+      if (!out.photos && rail.length >= 2) {
+        var maybe = rail[rail.length - 2].el;
+        if (used.indexOf(maybe) === -1) out.photos = take(maybe);
+      }
+    }
+    // Do NOT invent an info control by index — wrong index was opening the gallery
+    return out;
   }
 
   function clickNative(el, toast) {
     if (!el) return false;
     try {
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
-    } catch (e) {}
+      el.focus({ preventScroll: true });
+    } catch (e0) {}
+    try {
+      el.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: "touch",
+          isPrimary: true
+        })
+      );
+    } catch (e1) {}
     try {
       el.click();
     } catch (e2) {
       return false;
     }
+    try {
+      el.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          cancelable: true,
+          pointerId: 1,
+          pointerType: "touch",
+          isPrimary: true
+        })
+      );
+    } catch (e3) {}
     if (toast) showToast(toast, "success");
     return true;
   }
@@ -1368,41 +1439,16 @@
     return true;
   }
 
-  function getProfileChatButton() {
-    var plane = findNativeProfileMessageButton();
-    if (plane) return plane;
-    var profile = findProfileHost() || qs(SEL.profile);
-    var roots = [profile, document.body].filter(Boolean);
-    for (var r = 0; r < roots.length; r++) {
-      var candidates = qsa('button, [role="button"], a', roots[r]);
-      for (var i = 0; i < candidates.length; i++) {
-        var el = candidates[i];
-        if (isOurUi(el) || !isVisible(el)) continue;
-        var label = (
-          (el.getAttribute("aria-label") || "") +
-          " " +
-          (el.getAttribute("data-testid") || "") +
-          " " +
-          (el.textContent || "")
-        )
-          .toLowerCase()
-          .trim();
-        if (label.indexOf("message") !== -1 || label.indexOf("send message") !== -1) {
-          if (profile && profile.contains(el)) return el;
-          if (!profile) return el;
-        }
-      }
-    }
-    return null;
-  }
-
   function cmdStartChat() {
     var profile = findProfileHost();
     if (!profile) {
       showToast("Open a profile first", "error");
       return;
     }
-    if (clickNative(findNativeProfileMessageButton() || getProfileChatButton(), "Message")) return;
+    var rail = classifyProfileRail();
+    if (clickNative(rail.message, "Message")) return;
+
+    // Focus profile compose box if already open
     var native = getNativeChatTextArea();
     if (native) {
       try {
@@ -1422,41 +1468,62 @@
       return;
     }
 
-    // 1) Native (i) on the right rail — opens the in-profile swipe-up sheet
-    if (clickNative(findNativeProfileInfoButton(), "Details")) return;
+    var rail = classifyProfileRail();
+    // Only click a rail control when it's explicitly labeled info/details — never index-guess
+    if (rail.info && clickNative(rail.info, "Details")) return;
 
-    // 2) Swipe up on the profile photo / media (native gesture)
+    // Native details are a swipe-up on the profile itself
     var media =
       qs("img", profile) ||
-      qs('[class*="photo"], [class*="media"], [class*="carousel"], [class*="gallery"]', profile);
+      qs('[class*="photo"], [class*="media"], [class*="carousel"]', profile) ||
+      profile;
     if (media && dispatchSwipeUp(media)) {
       showToast("Details", "success");
       return;
     }
 
-    // 3) Tap name/stats overlay (sometimes expands details)
     var overlay =
       qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
       qs('[class*="profileName"], [class*="cruiser-name"], [class*="headline"]', profile);
     if (overlay && !isOurUi(overlay) && clickNative(overlay, "Details")) return;
 
-    // 4) Last resort: our readable sheet
     renderProfileDetailsModal();
   }
 
   function cmdProfilePics() {
-    if (clickNative(findNativeProfilePicsButton(), "Pics")) return;
-    cmdPics();
+    // Temporary: open their gallery. Send-pics flow TBD.
+    var rail = classifyProfileRail();
+    if (clickNative(rail.photos, "Photos")) return;
+    showToast("Photos — send from chat coming next", "error");
   }
 
   function cmdProfileFavorite() {
-    if (clickNative(findNativeProfileFavoriteButton(), "Favorited")) return;
-    cmdFavoriteProfile();
+    // Star → Pin for Later
+    var rail = classifyProfileRail();
+    if (clickNative(rail.pin, "Pinned for later")) return;
+    if (clickNative(getFavoriteButton(), "Pinned for later")) return;
+    showToast("Pin for Later not found", "error");
   }
 
   function cmdProfileShield() {
-    if (clickNative(findNativeProfileShieldButton(), "Safety")) return;
-    showToast("Safety control not found", "error");
+    // Block / Report on the native rail (opens report/block sheet)
+    var rail = classifyProfileRail();
+    if (clickNative(rail.report, "Report / Block")) return;
+
+    // Fallback: any report/block control on the profile
+    var profile = findProfileHost() || qs(SEL.profile);
+    if (profile) {
+      var nodes = qsa('button, [role="button"], a', profile);
+      for (var i = 0; i < nodes.length; i++) {
+        var el = nodes[i];
+        if (isOurUi(el) || !isVisible(el)) continue;
+        var L = railLabelFor(el);
+        if (/report cruiser|block cruiser|\breport\b|\bblock\b/.test(L)) {
+          if (clickNative(el, "Report / Block")) return;
+        }
+      }
+    }
+    showToast("Block / Report not found", "error");
   }
 
   function scrapeProfileDetails() {
@@ -2333,12 +2400,12 @@
 
   function ensureSidebar() {
     var side = document.getElementById(SIDEBAR_ID);
-    if (side && side.getAttribute("data-ready") === "2") return side;
+    if (side && side.getAttribute("data-ready") === "3") return side;
 
     if (side) side.remove();
     side = document.createElement("div");
     side.id = SIDEBAR_ID;
-    side.setAttribute("data-ready", "2");
+    side.setAttribute("data-ready", "3");
     Object.assign(side.style, {
       position: "fixed",
       top: "auto",
@@ -2363,11 +2430,11 @@
       pointerEvents: "auto"
     });
 
-    // Block · Star · Info · Send pics · Send message
-    side.appendChild(makeSidebarBtn("shield", "block", "Block"));
-    side.appendChild(makeSidebarBtn("favorites", "star", "Favorite"));
+    // Block · Pin · Details · Photos · Message
+    side.appendChild(makeSidebarBtn("shield", "block", "Block / Report"));
+    side.appendChild(makeSidebarBtn("favorites", "star", "Pin for Later"));
     side.appendChild(makeSidebarBtn("details", "info", "Profile details"));
-    side.appendChild(makeSidebarBtn("pics", "pics", "Send pics"));
+    side.appendChild(makeSidebarBtn("pics", "photos", "Photos"));
     side.appendChild(makeSidebarBtn("message", "send", "Send message"));
 
     side.addEventListener(
@@ -2443,12 +2510,12 @@
 
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "7") return bar;
+    if (bar && bar.getAttribute("data-ready") === "8") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "7");
+    bar.setAttribute("data-ready", "8");
     Object.assign(bar.style, {
       position: "fixed",
       bottom: "0",
@@ -2671,6 +2738,7 @@
         findChatListHost: findChatListHost,
         cmdShowProfileDetails: cmdShowProfileDetails,
         cmdStartChat: cmdStartChat,
+        classifyProfileRail: classifyProfileRail,
         SEL: SEL,
         version: VERSION
       };

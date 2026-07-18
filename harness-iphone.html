@@ -204,14 +204,41 @@
       log(assert(!!side.querySelector('[data-cmd="message"]'), "sidebar has Message"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
 
-      // Details clicks native info rail button (swipe-up trigger), not our sheet first
+      // Details clicks labeled Profile info — never Photos/gallery
       let nativeInfo = false;
+      let nativePhotos = false;
       const infoBtn = document.querySelector('app-profile button[aria-label="Profile info"]');
+      const photosBtn = document.querySelector('app-profile button[aria-label="Photos"]');
       if (infoBtn) infoBtn.addEventListener("click", () => { nativeInfo = true; }, { once: true });
+      if (photosBtn) photosBtn.addEventListener("click", () => { nativePhotos = true; }, { once: true });
       side.querySelector('[data-cmd="details"]').click();
       await wait(80);
-      log(assert(nativeInfo, "Details sidebar btn clicks native Profile info"));
+      log(assert(nativeInfo, "Details clicks native Profile info"));
+      log(assert(!nativePhotos, "Details does not open Photos/gallery"));
       document.getElementById("sniffies-iphone-profile-details")?.remove();
+
+      // Star → Pin for Later
+      let nativePin = false;
+      const pinBtn = document.querySelector('app-profile button[aria-label="Pin for Later"]');
+      if (pinBtn) pinBtn.addEventListener("click", () => { nativePin = true; }, { once: true });
+      side.querySelector('[data-cmd="favorites"]').click();
+      await wait(80);
+      log(assert(nativePin, "Star clicks Pin for Later"));
+
+      // Block → Report Cruiser
+      let nativeReport = false;
+      const reportBtn = document.querySelector('app-profile button[aria-label="Report Cruiser"]');
+      if (reportBtn) reportBtn.addEventListener("click", () => { nativeReport = true; }, { once: true });
+      side.querySelector('[data-cmd="shield"]').click();
+      await wait(80);
+      log(assert(nativeReport, "Block clicks Report Cruiser"));
+
+      // Photos opens gallery control
+      nativePhotos = false;
+      if (photosBtn) photosBtn.addEventListener("click", () => { nativePhotos = true; }, { once: true });
+      side.querySelector('[data-cmd="pics"]').click();
+      await wait(80);
+      log(assert(nativePhotos, "Photos sidebar opens native Photos"));
 
       // Message clicks native Message rail button
       let nativeMsg = false;
