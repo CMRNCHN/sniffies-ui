@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.5
+// @version      1.1.7
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.5";
+  var VERSION = "1.1.7";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -258,6 +258,18 @@
     return true;
   }
 
+  /** True if a meaningful part of the element is on-screen (not parked off-canvas). */
+  function isOnScreen(el, minPx) {
+    if (!isVisible(el)) return false;
+    minPx = minPx == null ? 48 : minPx;
+    var r = el.getBoundingClientRect();
+    var vw = window.innerWidth || 1;
+    var vh = window.innerHeight || 1;
+    var visibleW = Math.min(r.right, vw) - Math.max(r.left, 0);
+    var visibleH = Math.min(r.bottom, vh) - Math.max(r.top, 0);
+    return visibleW >= minPx && visibleH >= minPx;
+  }
+
   function qs(selector, root) {
     try {
       return (root || document).querySelector(selector);
@@ -333,35 +345,67 @@
     return null;
   }
 
+  function isComposerTakeoverOn() {
+    return !!(document.body && document.body.classList.contains("sniffies-iphone-composer-takeover"));
+  }
+
   function findChatComposerPanel() {
-    return firstVisible(SEL.chatInputPanel);
+    var visible = firstVisible(SEL.chatInputPanel);
+    if (visible) return visible;
+    // Takeover parks the native panel at 1×1 / off-screen — still a chat surface
+    if (isComposerTakeoverOn()) {
+      var parked =
+        qs("[data-testid='chatInputPanel']") ||
+        qs("#chat-input-panel") ||
+        qs("app-chat-input");
+      if (parked && !isOurUi(parked)) return parked;
+    }
+    return null;
   }
 
   function findProfileHost() {
-    var host = firstVisible(SEL.profile);
-    if (host) return host;
-    // Some mobile layouts keep app-profile in DOM with odd visibility — still treat as profile
-    var parked = qs(SEL.profile);
-    if (parked && !isOurUi(parked)) {
-      var r = parked.getBoundingClientRect();
-      if (r.width >= 2 && r.height >= 2) return parked;
+    // Prefer a profile that is actually on-screen. Parked app-profile nodes
+    // often stay in the DOM during private chat and were stealing CHAT detection.
+    var hosts = qsa(SEL.profile);
+    var i;
+    for (i = 0; i < hosts.length; i++) {
+      if (!isOurUi(hosts[i]) && isOnScreen(hosts[i], 80)) return hosts[i];
     }
+
     var headline =
       firstVisible('[data-testid="profileHeadlineTableContainer"]') ||
       firstVisible('[data-testid*="profileHeadline"]') ||
-      firstVisible('[data-testid*="ProfileHeadline"]');
-    if (headline) {
+      firstVisible('[data-testid*="ProfileHeadline"]') ||
+      firstVisible('[data-testid="profileCruiserFullStatsContainer"]') ||
+      firstVisible("profile-cruiser-stats-container");
+    if (headline && isOnScreen(headline, 40)) {
       return (
         headline.closest("app-profile") ||
         headline.closest('[class*="profile"]') ||
         headline
       );
     }
+
+    // Title alone is too weak if a chat composer is the active surface
     var t = titleHint();
-    if (t.indexOf("cruiser profile") !== -1 || t.indexOf("registered cruiser") !== -1) {
-      return qs(SEL.profile) || headline || document.body;
+    if (
+      (t.indexOf("cruiser profile") !== -1 || t.indexOf("registered cruiser") !== -1) &&
+      !findChatComposerPanel()
+    ) {
+      for (i = 0; i < hosts.length; i++) {
+        if (!isOurUi(hosts[i]) && isVisible(hosts[i])) return hosts[i];
+      }
     }
     return null;
+  }
+
+  function findPrivateChatSurface() {
+    // Strong signals of an individual chat thread (not profile Message box)
+    return (
+      firstVisible('[data-testid="privateChat"], [data-testid="chatThread"], app-private-chat, app-chat-thread') ||
+      firstVisible('[class*="private-chat"], [class*="privateChat"], [class*="chat-thread"], [class*="chatThread"]') ||
+      firstVisible('[data-testid="chatHistory"], [class*="chat-history"], [class*="chatHistory"]')
+    );
   }
 
   function getNativeChatTextArea() {
@@ -429,18 +473,36 @@
   }
 
   function isChatThreadOpen() {
-    // Profile pages embed a Message composer — that is NOT a private chat thread.
-    if (findProfileHost()) return false;
-    if (findChatComposerPanel()) return true;
-    if (getNativeChatTextArea()) return true;
+    var profile = findProfileHost();
+    var panel = findChatComposerPanel();
+    var area = getNativeChatTextArea();
+    var thread = findPrivateChatSurface();
     var t = titleHint();
-    return t.indexOf("private chat") !== -1;
+    var path = (location.pathname || "").toLowerCase();
+    var takeover = isComposerTakeoverOn();
+
+    // Explicit private-chat surfaces win even if a parked profile exists
+    if (thread && isOnScreen(thread, 60)) return true;
+    if (/private chat|conversation/.test(t) && (panel || area)) return true;
+    if (/\/chat\//.test(path) && (panel || area)) return true;
+
+    // Active on-screen profile with an inline Message box is PROFILE, not CHAT
+    if (profile) return false;
+
+    // During takeover the native panel is intentionally off-screen — stay in CHAT
+    // only while that panel/textarea still exists in the DOM.
+    if (takeover && (panel || area)) return true;
+
+    if (panel && isOnScreen(panel, 24)) return true;
+    if (area && isOnScreen(area, 20)) return true;
+    return false;
   }
 
   function resolveViewState() {
-    // Profile must win over CHAT: cruiser profiles include chatInputPanel / textarea.
-    if (findProfileHost()) return "PROFILE";
+    // If a private chat thread/composer is the active surface, prefer CHAT
+    // even when a parked app-profile remains in the DOM.
     if (isChatThreadOpen()) return "CHAT";
+    if (findProfileHost()) return "PROFILE";
     if (isChatListOpen()) return "CHATS_LIST";
     return "MAP";
   }
@@ -1277,6 +1339,35 @@
     return false;
   }
 
+  function getProfileShellRoots(profile) {
+    var roots = [];
+    var seen = [];
+    function add(node) {
+      if (!node || seen.indexOf(node) !== -1 || isOurUi(node)) return;
+      seen.push(node);
+      roots.push(node);
+    }
+    add(profile);
+    if (profile) {
+      add(profile.parentElement);
+      // Native rail / photo chrome often lives as a sibling of app-profile
+      var p = profile.parentElement;
+      if (p) {
+        var kids = p.children;
+        for (var i = 0; i < kids.length; i++) add(kids[i]);
+      }
+      add(profile.closest("app-info-window, [class*='info-window'], [class*='infoWindow']"));
+      add(profile.closest('[class*="profile-overlay"], [class*="profileOverlay"]'));
+    }
+    add(
+      firstVisible(
+        "app-info-window, [class*='upper-control'], [class*='upperControl'], [class*='profile-actions'], [class*='profileActions']"
+      )
+    );
+    add(document.body);
+    return roots;
+  }
+
   function getProfileActionRail() {
     var profile = findProfileHost() || qs(SEL.profile);
     if (!profile) return [];
@@ -1284,7 +1375,7 @@
     if (pr.width < 40 || pr.height < 40) return [];
     var items = [];
     var seen = [];
-    var roots = [profile, document.body];
+    var roots = getProfileShellRoots(profile);
     var selector =
       'button, [role="button"], a, [tabindex], i.fa, i[class*="fa-"], [class*="sniffiesIcon"], [class*="paper-plane"], [class*="paperPlane"]';
 
@@ -1309,7 +1400,8 @@
         var onProfileRight =
           r.left > pr.left + pr.width * 0.55 && r.right > pr.right - 110;
         if (!nearRightEdge && !onProfileRight) continue;
-        if (r.bottom < pr.top - 40 || r.top > pr.bottom + 40) continue;
+        // Allow controls over the photo band above the scrolled details panel
+        if (r.bottom < pr.top - 120 || r.top > pr.bottom + 40) continue;
 
         seen.push(host);
         items.push({
@@ -1417,12 +1509,55 @@
       })
       .join("\n\n");
 
+    // Sibling / shell HTML — native Message often lives outside app-profile
+    var shellHtml = "";
+    if (profile && profile.parentElement) {
+      try {
+        var shell = profile.parentElement.cloneNode(true);
+        // Drop the giant scrolled profile body; keep siblings + shell chrome
+        var clonedProfile = shell.querySelector("app-profile");
+        if (clonedProfile) {
+          clonedProfile.innerHTML =
+            "<!-- app-profile body omitted; see PROFILE HTML -->";
+        }
+        shellHtml = slimHtml(shell.outerHTML, 60000);
+      } catch (e3) {}
+    }
+
+    // Right-edge candidates across the viewport (even if not classified)
+    var edgeBits = [];
+    try {
+      var candidates = qsa(
+        'button, [role="button"], a, i.fa, i[class*="fa-"], [class*="sniffiesIcon"]'
+      );
+      for (var ei = 0; ei < candidates.length; ei++) {
+        var cel = candidates[ei];
+        if (isOurUi(cel)) continue;
+        var cr = cel.getBoundingClientRect();
+        if (cr.width < 2 || cr.height < 2 || cr.width > 96 || cr.height > 96) continue;
+        if (cr.right < window.innerWidth - 120) continue;
+        if (cr.top < 40 || cr.bottom > window.innerHeight - 40) continue;
+        edgeBits.push(
+          "<!-- edge " +
+            Math.round(cr.top) +
+            "," +
+            Math.round(cr.left) +
+            " " +
+            ((cel.getAttribute("aria-label") || cel.getAttribute("data-testid") || cel.className || "").toString().slice(0, 80)) +
+            " -->\n" +
+            slimHtml(cel.outerHTML, 2500)
+        );
+        if (edgeBits.length >= 24) break;
+      }
+    } catch (e4) {}
+
     var meta = {
       version: VERSION,
       url: location.href,
       view: resolveViewState(),
       viewport: { w: window.innerWidth, h: window.innerHeight },
       railCount: rail.length,
+      edgeCount: edgeBits.length,
       classified: {
         report: !!classified.report,
         pin: !!classified.pin,
@@ -1455,6 +1590,10 @@
       JSON.stringify(meta, null, 2) +
       "\n\n=== RAIL HTML ===\n" +
       (railHtml || "<!-- no rail nodes found -->") +
+      "\n\n=== RIGHT-EDGE CANDIDATES ===\n" +
+      (edgeBits.join("\n\n") || "<!-- none -->") +
+      "\n\n=== PROFILE SHELL HTML ===\n" +
+      (shellHtml || "<!-- no shell -->") +
       "\n\n=== PROFILE HTML ===\n" +
       (htmlParts.join("\n\n") || "<!-- no app-profile -->")
     );
@@ -1918,6 +2057,72 @@
     if (headline) {
       var ht = cleanProfileText(headline.textContent);
       if (ht && !isProfileChromeText(ht)) title = ht.slice(0, 80);
+    }
+
+    // 0) Native structured stats (profile-stats data-testids)
+    var statsHost = qs("profile-stats", profile) || qs('[data-testid="ageStat"]', profile);
+    if (statsHost) {
+      var statBits = [];
+      var testIds = [
+        "ageStat",
+        "genderStat",
+        "heightInCmStat",
+        "weightInKgStat",
+        "endowmentStat",
+        "spectrumStat",
+        "attitudeStat"
+      ];
+      for (var si = 0; si < testIds.length; si++) {
+        var sEl = qs('[data-testid="' + testIds[si] + '"]', profile);
+        var sv = cleanProfileText(sEl && sEl.textContent);
+        if (sv) statBits.push(sv);
+      }
+      if (statBits.length) summary = statBits.join(", ");
+    }
+
+    // 0b) Place / time ("I'm hosting")
+    var place = qs("app-profile-place-and-time, [data-testid='profilePlaceAndTimeComponent']", profile);
+    if (place) {
+      var placeText = cleanProfileText(place.textContent);
+      if (placeText) addValues("Location", splitChipValues(placeText));
+    }
+
+    // 0c) Cruiser stats rows: title + badges (Location / Practices / HIV Status…)
+    var cruiserRows = qsa(
+      "profile-cruiser-stats-row, [class*='profile-cruiser-stats-row-container']",
+      profile
+    );
+    for (var cr = 0; cr < cruiserRows.length; cr++) {
+      var row = cruiserRows[cr];
+      if (isOurUi(row)) continue;
+      var titleEl =
+        qs(".profile-cruiser-stats-row-title, [class*='profile-cruiser-stats-row-title']", row) ||
+        qs("typography p, p.typography--body", row);
+      var rowLabel = matchSectionLabel(cleanProfileText(titleEl && titleEl.textContent));
+      if (!rowLabel && titleEl) {
+        // Title node often also wraps badge text — take first line-ish word(s)
+        var rawTitle = cleanProfileText(titleEl.textContent);
+        rowLabel = matchSectionLabel(rawTitle.split(/\s{2,}/)[0] || rawTitle);
+      }
+      if (!rowLabel) continue;
+      var badgeEls = qsa(
+        "profile-cruiser-stats-badge, .profile-cruiser-stats-badge, [class*='profile-cruiser-stats-badge']",
+        row
+      );
+      var badgeVals = [];
+      if (badgeEls.length) {
+        for (var bi = 0; bi < badgeEls.length; bi++) {
+          var bv = cleanProfileText(badgeEls[bi].textContent);
+          if (bv) badgeVals.push(bv);
+        }
+      } else {
+        var badgesHost = qs(
+          ".profile-cruiser-stats-row-badges, [class*='profile-cruiser-stats-row-badges']",
+          row
+        );
+        if (badgesHost) badgeVals = splitChipValues(badgesHost.textContent);
+      }
+      if (badgeVals.length) addValues(rowLabel, badgeVals);
     }
 
     // 1) Structured rows: label node + nearby value/chips (native layout)

@@ -82,13 +82,57 @@
     function sceneProfile() {
       clearFixture();
       fixture.innerHTML = `
-        <app-profile style="display:block;position:relative;width:360px;height:640px">
+        <app-profile style="display:block;position:relative;width:360px;height:640px" aria-label="View Profile Photo">
           <img alt="profile" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" style="width:100%;height:220px;object-fit:cover;background:#333" />
           <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
-          <div class="stats">27m, 5'9", muscular, top</div>
-          <div class="profile-section"><div>Location</div><div>Can host</div></div>
-          <div class="profile-section"><div>Into Public</div><div>Cars Beaches Outdoors Parks Restrooms Saunas</div></div>
-          <div class="profile-section"><div>HIV Status</div><div>Negative, On PrEP</div></div>
+          <table class="profile-data-table">
+            <tr><td>
+              <profile-stats>
+                <span data-testid="ageStat">27</span>
+                <span data-testid="genderStat">m</span>
+                <span data-testid="heightInCmStat">5'9"</span>
+                <span data-testid="weightInKgStat">165lb</span>
+                <span data-testid="endowmentStat">7"</span>
+                <span data-testid="spectrumStat">gay</span>
+                <span data-testid="attitudeStat">top</span>
+              </profile-stats>
+            </td></tr>
+          </table>
+          <app-profile-place-and-time data-testid="profilePlaceAndTimeComponent">I'm hosting</app-profile-place-and-time>
+          <profile-cruiser-stats-container data-testid="profileCruiserFullStatsContainer">
+            <profile-cruiser-stats-row>
+              <div class="profile-cruiser-stats-row-container">
+                <div class="profile-cruiser-stats-row">
+                  <div class="profile-cruiser-stats-row-title"><p>Location</p></div>
+                  <div class="profile-cruiser-stats-row-badges">
+                    <profile-cruiser-stats-badge><div class="profile-cruiser-stats-badge" data-testid="hostingHost"><p>Can host</p></div></profile-cruiser-stats-badge>
+                  </div>
+                </div>
+              </div>
+            </profile-cruiser-stats-row>
+            <profile-cruiser-stats-row>
+              <div class="profile-cruiser-stats-row-container">
+                <div class="profile-cruiser-stats-row">
+                  <div class="profile-cruiser-stats-row-title"><p>Into Public</p></div>
+                  <div class="profile-cruiser-stats-row-badges">
+                    <profile-cruiser-stats-badge><div class="profile-cruiser-stats-badge"><p>Cars</p></div></profile-cruiser-stats-badge>
+                    <profile-cruiser-stats-badge><div class="profile-cruiser-stats-badge"><p>Beaches</p></div></profile-cruiser-stats-badge>
+                  </div>
+                </div>
+              </div>
+            </profile-cruiser-stats-row>
+            <profile-cruiser-stats-row>
+              <div class="profile-cruiser-stats-row-container">
+                <div class="profile-cruiser-stats-row">
+                  <div class="profile-cruiser-stats-row-title"><p>HIV Status</p></div>
+                  <div class="profile-cruiser-stats-row-badges">
+                    <profile-cruiser-stats-badge><div class="profile-cruiser-stats-badge" data-testid="hivStatusNegative"><p>Negative</p></div></profile-cruiser-stats-badge>
+                    <profile-cruiser-stats-badge><div class="profile-cruiser-stats-badge"><p>On PrEP</p></div></profile-cruiser-stats-badge>
+                  </div>
+                </div>
+              </div>
+            </profile-cruiser-stats-row>
+          </profile-cruiser-stats-container>
           <div class="profile-section"><div>HIV Tested</div><div>Mar 28, 2026</div></div>
           <div class="profile-section"><div>STI Tested</div><div>Mar 28, 2026</div></div>
           <div class="profile-section"><div>Safeguards</div><div>DoxyPEP COVID Vaccinated</div></div>
@@ -278,6 +322,33 @@
       const sendBtn = document.querySelector('[data-testid="sendButton"]');
       log(assert(ok === true, "insertAndSendMessage returns true"));
       log(assert(sendBtn.dataset.lastSent === "Harness ping", "send button received text"));
+
+      // Parked app-profile (off-screen) must not hide individual-chat composer
+      clearFixture();
+      fixture.innerHTML = `
+        <app-profile style="position:fixed;left:-9999px;top:0;width:360px;height:640px;display:block">
+          <div data-testid="profileHeadlineTableContainer">Parked Cruiser</div>
+          <div data-testid="profileCruiserFullStatsContainer">Location Can host</div>
+        </app-profile>
+        <div id="chat-input-panel" data-testid="chatInputPanel" class="chat-input-panel" style="display:block;width:420px;height:120px">
+          <textarea name="chatTextArea" data-testid="chatTextArea"></textarea>
+          <button type="button" data-testid="sendButton">Send</button>
+        </div>`;
+      await wait(150);
+      api.renderBar(api.resolveViewState());
+      await wait(120); // allow MutationObserver tick after takeover parks native panel
+      log(assert(api.resolveViewState() === "CHAT", "CHAT wins over parked off-screen profile"));
+      log(assert(!!document.getElementById("sniffies-iphone-composer") &&
+        document.getElementById("sniffies-iphone-composer").style.display !== "none", "composer visible with parked profile"));
+      log(assert(document.body.classList.contains("sniffies-iphone-composer-takeover"), "takeover stays on while CHAT"));
+
+      // Native-shaped scrape (profile-stats + cruiser rows)
+      sceneProfile();
+      await wait(80);
+      const scrapedNative = api.scrapeProfileDetails?.();
+      log(assert(/27.*m|5'9"|gay|top/i.test(scrapedNative?.summary || ""), "scrape summary from profile-stats testids"));
+      log(assert((scrapedNative?.sections || []).some((s) => s.label === "Location" && /Can host|hosting/i.test(s.values.join(" "))), "scrape Location from cruiser row"));
+      log(assert((scrapedNative?.sections || []).some((s) => s.label === "HIV Status" && /Negative/i.test(s.values.join(" "))), "scrape HIV Status from badge"));
 
       sceneChats();
       const panel = document.createElement("div");
