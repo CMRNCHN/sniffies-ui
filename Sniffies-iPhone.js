@@ -3305,6 +3305,8 @@
         cmdStartChat: cmdStartChat,
         classifyProfileRail: classifyProfileRail,
         dumpProfileRail: dumpProfileRail,
+        dumpProfileDebug: dumpProfileDebug,
+        buildProfileDebugDump: buildProfileDebugDump,
         scrapeProfileDetails: scrapeProfileDetails,
         renderProfileDetailsModal: renderProfileDetailsModal,
         SEL: SEL,
