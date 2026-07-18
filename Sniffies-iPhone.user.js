@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.7
+// @version      1.1.8
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.7";
+  var VERSION = "1.1.8";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -465,11 +465,18 @@
     return ((document.title || "") + " " + (location.pathname || "")).toLowerCase();
   }
 
+  /** /profile/:id/chat — private thread URL (no trailing slash required). */
+  function isProfileChatPath() {
+    return /\/profile\/[^/]+\/chat\/?$/i.test(location.pathname || "");
+  }
+
   function isChatListOpen() {
+    if (isProfileChatPath()) return false;
     if (findChatListHost()) return true;
     if (firstVisible(SEL.chatListRow) || firstVisible(SEL.chatListTab)) return true;
     var t = titleHint();
-    return t.indexOf("chat list") !== -1 || /\/chat\/?$/.test(location.pathname || "");
+    // Bare /chat is the list — not /profile/:id/chat
+    return t.indexOf("chat list") !== -1 || /^\/chat\/?$/i.test(location.pathname || "");
   }
 
   function isChatThreadOpen() {
@@ -481,10 +488,14 @@
     var path = (location.pathname || "").toLowerCase();
     var takeover = isComposerTakeoverOn();
 
+    // Profile private-chat route always wins (dump: view was wrongly PROFILE on this URL)
+    if (isProfileChatPath()) return true;
+
     // Explicit private-chat surfaces win even if a parked profile exists
     if (thread && isOnScreen(thread, 60)) return true;
     if (/private chat|conversation/.test(t) && (panel || area)) return true;
-    if (/\/chat\//.test(path) && (panel || area)) return true;
+    // /chat/… thread paths (not bare /chat list)
+    if (/\/chat\//.test(path) && (panel || area || takeover)) return true;
 
     // Active on-screen profile with an inline Message box is PROFILE, not CHAT
     if (profile) return false;
@@ -1344,6 +1355,7 @@
     var seen = [];
     function add(node) {
       if (!node || seen.indexOf(node) !== -1 || isOurUi(node)) return;
+      if (node === document.body || node === document.documentElement) return;
       seen.push(node);
       roots.push(node);
     }
@@ -1364,18 +1376,33 @@
         "app-info-window, [class*='upper-control'], [class*='upperControl'], [class*='profile-actions'], [class*='profileActions']"
       )
     );
-    add(document.body);
+    // Chat header controls (Pin user / LivePlay) sit outside app-profile
+    add(qs('[data-testid="pinUserButton"]') && qs('[data-testid="pinUserButton"]').parentElement);
     return roots;
+  }
+
+  function isMapMarkerNoise(el) {
+    if (!el || !el.closest) return false;
+    return !!(
+      el.closest(
+        '[data-testid="markerUserContainer"], .marker-container, .mgl-marker, .maplibregl-marker, marker-icon-grid'
+      ) ||
+      el.closest(
+        ".lower-map-icon, [data-testid='travelModeIcon'], [data-testid='hideMeButton'], [data-testid='crosshairsIcon'], [data-testid='globalChatIcon'], .global-chat-nav, app-upper-nav-container"
+      )
+    );
   }
 
   function getProfileActionRail() {
     var profile = findProfileHost() || qs(SEL.profile);
-    if (!profile) return [];
+    if (!profile || profile === document.body) return [];
     var pr = profile.getBoundingClientRect();
-    if (pr.width < 40 || pr.height < 40) return [];
+    // On /profile/:id/chat the profile host can be tiny/parked — still scan header controls
     var items = [];
     var seen = [];
     var roots = getProfileShellRoots(profile);
+    var vw = window.innerWidth || 1;
+    var vh = window.innerHeight || 1;
     var selector =
       'button, [role="button"], a, [tabindex], i.fa, i[class*="fa-"], [class*="sniffiesIcon"], [class*="paper-plane"], [class*="paperPlane"]';
 
@@ -1392,24 +1419,42 @@
         }
         if (!host || !isClickableRailHost(host)) host = el.parentElement || el;
         if (isOurUi(host) || seen.indexOf(host) !== -1) continue;
+        if (isMapMarkerNoise(host)) continue;
 
         var r = host.getBoundingClientRect();
         if (r.width < 2 || r.height < 2) continue;
         if (r.width > 100 || r.height > 100) continue;
-        var nearRightEdge = r.right > window.innerWidth - 110;
+        // Must actually intersect the viewport (dump had markers at left:2700+)
+        if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
+        if (r.left < 0 || r.right > vw + 4) continue;
+
+        var testid = host.getAttribute("data-testid") || "";
+        var label = railLabelFor(host);
+        // Known chat/profile header controls — always keep when on-screen
+        var knownHeader =
+          testid === "pinUserButton" ||
+          testid === "startVideoCallButton" ||
+          /pin user|pin for later|report|block|message|photos?|fa-paper-plane|controls-icon/.test(
+            label
+          );
+
+        var nearRightEdge = r.right > vw - 110 && r.left > vw * 0.55;
         var onProfileRight =
-          r.left > pr.left + pr.width * 0.55 && r.right > pr.right - 110;
-        if (!nearRightEdge && !onProfileRight) continue;
-        // Allow controls over the photo band above the scrolled details panel
-        if (r.bottom < pr.top - 120 || r.top > pr.bottom + 40) continue;
+          pr.width >= 40 &&
+          r.left > pr.left + pr.width * 0.55 &&
+          r.right > pr.right - 110;
+        if (!knownHeader && !nearRightEdge && !onProfileRight) continue;
+        if (!knownHeader && pr.height >= 40) {
+          if (r.bottom < pr.top - 120 || r.top > pr.bottom + 40) continue;
+        }
 
         seen.push(host);
         items.push({
           el: host,
           top: r.top,
-          label: railLabelFor(host),
+          label: label,
           tag: (host.tagName || "").toLowerCase(),
-          testid: host.getAttribute("data-testid") || "",
+          testid: testid,
           aria: host.getAttribute("aria-label") || ""
         });
       }
@@ -1480,12 +1525,13 @@
 
   function buildProfileDebugDump() {
     var profile = findProfileHost() || qs(SEL.profile);
+    if (profile === document.body || profile === document.documentElement) profile = qs(SEL.profile);
     var rail = getProfileActionRail();
     var classified = classifyProfileRail();
 
     // Right-edge HTML slice: clone profile + any right-rail hosts outside it
     var htmlParts = [];
-    if (profile) {
+    if (profile && profile !== document.body) {
       try {
         htmlParts.push("<!-- app-profile -->\n" + slimHtml(profile.outerHTML, 90000));
       } catch (e) {}
@@ -1692,46 +1738,63 @@
       return el;
     }
 
+    // Prefer stable native testids from dumps
+    var pinBtn = qs('[data-testid="pinUserButton"]');
+    if (pinBtn && isOnScreen(pinBtn, 12) && !isMapMarkerNoise(pinBtn)) {
+      out.pin = take(pinBtn);
+    }
+
     for (i = 0; i < rail.length; i++) {
       var L = rail[i].label;
       var el = rail[i].el;
+      var tid = rail[i].testid || "";
+      if (tid === "startVideoCallButton" || /liveplay|startvideocall|fa-video/.test(L)) continue;
       if (/report|block|flag|shield/.test(L) && !out.report) out.report = take(el);
-      else if (/pin for later|pinned for later|pin later|unpin for later/.test(L) && !out.pin)
+      else if (
+        (/pin for later|pinned for later|pin later|unpin for later|pin user|pinuserbutton|fa-thumbtack/.test(
+          L
+        ) ||
+          tid === "pinUserButton") &&
+        !out.pin
+      ) {
         out.pin = take(el);
+      }
     }
     for (i = 0; i < rail.length; i++) {
       L = rail[i].label;
       el = rail[i].el;
       if (used.indexOf(el) !== -1) continue;
+      if (/cruiser selected|settingsbutton|globalchaticon|travelmode|hide me|find me/.test(L))
+        continue;
       if (isPhotoish(L) && !out.photos) out.photos = take(el);
       else if (isMessageish(L) && !out.message) out.message = take(el);
       else if (/\b(info|details?|about)\b/.test(L) && !isPhotoish(L) && !out.info)
         out.info = take(el);
-      else if (/favorit|bookmark|\bstar\b|\bpin\b/.test(L) && !out.pin) out.pin = take(el);
+      else if (/favorit|bookmark|\bstar\b/.test(L) && !out.pin) out.pin = take(el);
     }
 
-    // Position fallbacks when icons are unlabeled (common on Sniffies mobile)
-    // Typical order: report · pin · photos · message  OR  report · pin · info · photos · message
-    if (!out.report && rail[0]) out.report = take(rail[0].el);
-    if (!out.pin && rail[1]) out.pin = take(rail[1].el);
-    if (!out.message) {
-      for (i = rail.length - 1; i >= 0; i--) {
-        if (used.indexOf(rail[i].el) === -1 && !isPhotoish(rail[i].label)) {
-          out.message = take(rail[i].el);
-          break;
+    // Position fallbacks ONLY for a small clean rail (never map-marker soup)
+    var clean = rail.filter(function (item) {
+      return (
+        !isMapMarkerNoise(item.el) &&
+        !/cruiser selected|settingsbutton|globalchaticon|travelmode|hide me|find me|liveplay|startvideocall/.test(
+          item.label
+        )
+      );
+    });
+    if (clean.length >= 2 && clean.length <= 8) {
+      if (!out.report && clean[0]) out.report = take(clean[0].el);
+      if (!out.pin && clean[1]) out.pin = take(clean[1].el);
+      if (!out.message) {
+        for (i = clean.length - 1; i >= 0; i--) {
+          if (used.indexOf(clean[i].el) === -1 && !isPhotoish(clean[i].label)) {
+            out.message = take(clean[i].el);
+            break;
+          }
         }
       }
-    }
-    if (!out.photos) {
-      for (i = 0; i < rail.length; i++) {
-        if (used.indexOf(rail[i].el) === -1 && isPhotoish(rail[i].label)) {
-          out.photos = take(rail[i].el);
-          break;
-        }
-      }
-      // Second-to-last unlabeled control is often photos when message is last
-      if (!out.photos && rail.length >= 2) {
-        var maybe = rail[rail.length - 2].el;
+      if (!out.photos && clean.length >= 2) {
+        var maybe = clean[clean.length - 2].el;
         if (used.indexOf(maybe) === -1) out.photos = take(maybe);
       }
     }
@@ -1818,7 +1881,38 @@
     return true;
   }
 
+  function focusChatComposer(toast) {
+    var native = getNativeChatTextArea();
+    if (native) {
+      try {
+        native.scrollIntoView({ block: "center", behavior: "smooth" });
+      } catch (e) {}
+      try {
+        native.focus();
+      } catch (e2) {}
+      if (toast) showToast(toast, "success");
+      return true;
+    }
+    if (isChatThreadOpen() || isProfileChatPath()) {
+      renderComposer("CHAT");
+      var our = getComposerTextarea();
+      if (our) {
+        try {
+          our.focus();
+        } catch (e3) {}
+        if (toast) showToast(toast, "success");
+        return true;
+      }
+    }
+    return false;
+  }
+
   function cmdStartChat() {
+    // Already on the private-chat route — no Message rail icon; focus composer
+    if (isProfileChatPath() || isChatThreadOpen()) {
+      if (focusChatComposer("Type your message")) return;
+    }
+
     var profile = findProfileHost();
     if (!profile) {
       showToast("Open a profile first", "error");
@@ -1829,16 +1923,7 @@
     // Our sidebar covers the native plane — click through at the same spot
     if (clickNativeUnderSidebar("message", "Message")) return;
 
-    // Focus profile compose box if already open
-    var native = getNativeChatTextArea();
-    if (native) {
-      try {
-        native.scrollIntoView({ block: "center", behavior: "smooth" });
-      } catch (e) {}
-      native.focus();
-      showToast("Type your message", "success");
-      return;
-    }
+    if (focusChatComposer("Type your message")) return;
 
     // Capture HTML + rail so you can paste it back here
     dumpProfileDebug().then(function () {
@@ -1865,12 +1950,14 @@
   }
 
   function cmdProfileFavorite() {
-    // Star → Pin for Later
+    // Star → Pin user (chat header) or Pin for Later (profile rail)
+    var pinBtn = qs('[data-testid="pinUserButton"]');
+    if (pinBtn && isOnScreen(pinBtn, 12) && clickNative(pinBtn, "Pinned")) return;
     var rail = classifyProfileRail();
     if (clickNative(rail.pin, "Pinned for later")) return;
     if (clickNativeUnderSidebar("favorites", "Pinned for later")) return;
     if (clickNative(getFavoriteButton(), "Pinned for later")) return;
-    showToast("Pin for Later not found", "error");
+    showToast("Pin not found", "error");
   }
 
   function cmdProfileShield() {

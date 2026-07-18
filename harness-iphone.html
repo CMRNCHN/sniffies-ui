@@ -367,6 +367,27 @@
       log(assert(api.resolveViewState() === "MAP", "global chat panel alone is not private CHAT"));
       log(assert(document.getElementById("sniffies-iphone-sidebar")?.style.display === "none", "sidebar hidden after leaving profile"));
 
+      // /profile/:id/chat must be CHAT even with on-screen profile chrome
+      clearFixture();
+      fixture.innerHTML = `
+        <app-profile style="display:block;width:360px;height:400px">
+          <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
+          <button data-testid="pinUserButton" aria-label="Pin user">Pin</button>
+          <div id="chat-input-panel" data-testid="chatInputPanel" style="display:block;width:340px;height:80px">
+            <textarea name="chatTextArea" data-testid="chatTextArea"></textarea>
+            <button data-testid="sendButton">Send</button>
+          </div>
+        </app-profile>`;
+      const prevPath = location.pathname;
+      history.replaceState({}, "", "/profile/abc123/chat");
+      await wait(80);
+      api.renderBar(api.resolveViewState());
+      log(assert(api.resolveViewState() === "CHAT", "/profile/:id/chat is CHAT not PROFILE"));
+      log(assert(document.getElementById("sniffies-iphone-sidebar")?.style.display === "none", "sidebar hidden on profile chat path"));
+      log(assert(!!document.getElementById("sniffies-iphone-composer") &&
+        document.getElementById("sniffies-iphone-composer").style.display !== "none", "composer on profile chat path"));
+      history.replaceState({}, "", prevPath || "/");
+
       const failed = lines.filter((l) => l.startsWith("FAIL")).length;
       results.className = failed ? "fail" : "pass";
       results.textContent = lines.join("\n") + "\n\n" + (failed ? failed + " failed" : "All passed");
