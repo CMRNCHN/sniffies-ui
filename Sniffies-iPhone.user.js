@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.2
+// @version      1.1.3
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.2";
+  var VERSION = "1.1.3";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -1467,26 +1467,7 @@
       showToast("Open a profile first", "error");
       return;
     }
-
-    var rail = classifyProfileRail();
-    // Only click a rail control when it's explicitly labeled info/details — never index-guess
-    if (rail.info && clickNative(rail.info, "Details")) return;
-
-    // Native details are a swipe-up on the profile itself
-    var media =
-      qs("img", profile) ||
-      qs('[class*="photo"], [class*="media"], [class*="carousel"]', profile) ||
-      profile;
-    if (media && dispatchSwipeUp(media)) {
-      showToast("Details", "success");
-      return;
-    }
-
-    var overlay =
-      qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
-      qs('[class*="profileName"], [class*="cruiser-name"], [class*="headline"]', profile);
-    if (overlay && !isOurUi(overlay) && clickNative(overlay, "Details")) return;
-
+    // Use our sectioned sheet — native details sit under the bar as a flat word dump
     renderProfileDetailsModal();
   }
 
@@ -1526,75 +1507,324 @@
     showToast("Block / Report not found", "error");
   }
 
+  // Labels used by Sniffies profile panels (match native section chrome)
+  var PROFILE_SECTION_LABELS = [
+    "Location",
+    "Into Public",
+    "Looking For",
+    "Fetishes",
+    "Kinks",
+    "Interaction",
+    "Into",
+    "Practices",
+    "HIV Status",
+    "HIV Tested",
+    "STI Tested",
+    "Safeguards",
+    "My Comfort Levels",
+    "I carry",
+    "I carry...",
+    "Hosting Status",
+    "Hosting",
+    "Gender",
+    "Position",
+    "Sexuality",
+    "Expression",
+    "Body Type",
+    "Endowment",
+    "Age",
+    "Height",
+    "Weight",
+    "Stats",
+    "Identity",
+    "Scene",
+    "Health"
+  ];
+
+  var PROFILE_CHROME_RE =
+    /^(message|send|back|close|favorite|pin|chat|map|saved|photos?|report|block|go back|edit|share|copy link|pulled from)/i;
+
+  function cleanProfileText(text) {
+    return stripControls(text || "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isProfileChromeText(text) {
+    if (!text) return true;
+    if (PROFILE_CHROME_RE.test(text)) return true;
+    if (text.length < 2 || text.length > 420) return true;
+    // Lone punctuation / icon font leftovers
+    if (/^[\u0000-\u007f\s]*$/.test(text) && !/[A-Za-z0-9']/.test(text)) return true;
+    return false;
+  }
+
+  function splitChipValues(text) {
+    text = cleanProfileText(text);
+    if (!text) return [];
+    // Prefer comma splits, else multi-word tokens separated by 2+ spaces / bullets
+    var parts;
+    if (text.indexOf(",") !== -1) {
+      parts = text.split(/\s*,\s*/);
+    } else if (/\s{2,}|[•·|]/.test(text)) {
+      parts = text.split(/\s{2,}|[•·|]+/);
+    } else {
+      // Space-separated short chips (Cars Beaches Outdoors…)
+      var words = text.split(/\s+/);
+      var short = words.every(function (w) {
+        return w.length <= 18;
+      });
+      if (short && words.length >= 2 && words.length <= 14) parts = words;
+      else return [text];
+    }
+    return parts
+      .map(function (p) {
+        return cleanProfileText(p);
+      })
+      .filter(function (p) {
+        return p && !isProfileChromeText(p) && p.toLowerCase() !== "you";
+      });
+  }
+
+  function matchSectionLabel(text) {
+    text = cleanProfileText(text);
+    if (!text) return null;
+    var lower = text.toLowerCase();
+    for (var i = 0; i < PROFILE_SECTION_LABELS.length; i++) {
+      var lab = PROFILE_SECTION_LABELS[i];
+      if (lower === lab.toLowerCase()) return lab;
+      // "Location Can host" → Location
+      if (lower.indexOf(lab.toLowerCase()) === 0 && text.length <= lab.length + 48) {
+        return lab;
+      }
+    }
+    return null;
+  }
+
+  function looksLikeStatsSummary(text) {
+    // e.g. 27m, 5'9", muscular, top
+    if (!text || text.length > 120) return false;
+    if ((text.match(/,/g) || []).length < 1) return false;
+    return /(\d+\s*'|\d+"|\d+\s*m\b|\d+\s*lb|muscular|slim|fit|stocky|chubby|vers|top|bottom|gay|african|latino|asian)/i.test(
+      text
+    );
+  }
+
   function scrapeProfileDetails() {
     var profile = findProfileHost() || qs(SEL.profile);
-    if (!profile) return { title: "Profile", lines: [] };
+    if (!profile) {
+      return { title: "Profile", summary: "", sections: [], notes: [] };
+    }
 
-    var lines = [];
-    var seen = {};
+    var sections = [];
+    var sectionMap = {};
+    var notes = [];
+    var seenValue = {};
+    var summary = "";
+    var title = "Profile details";
 
-    function addLine(text, weight) {
-      text = stripControls(text).replace(/\s+/g, " ").trim();
-      if (!text || text.length < 2 || text.length > 400) return;
+    function ensureSection(label) {
+      if (sectionMap[label]) return sectionMap[label];
+      var sec = { label: label, values: [] };
+      sectionMap[label] = sec;
+      sections.push(sec);
+      return sec;
+    }
+
+    function addValues(label, values) {
+      if (!label || !values || !values.length) return;
+      var sec = ensureSection(label);
+      for (var i = 0; i < values.length; i++) {
+        var v = cleanProfileText(values[i]);
+        if (!v || isProfileChromeText(v)) continue;
+        if (matchSectionLabel(v) === label && values.length === 1) continue;
+        // Strip leading label from value ("Location Can host" → "Can host")
+        var labRe = new RegExp("^" + label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*[:\\-]?\\s*", "i");
+        v = v.replace(labRe, "").trim();
+        if (!v || v.toLowerCase() === label.toLowerCase()) continue;
+        var key = label + "::" + v.toLowerCase();
+        if (seenValue[key]) continue;
+        seenValue[key] = true;
+        sec.values.push(v);
+      }
+    }
+
+    function addNote(text) {
+      text = cleanProfileText(text);
+      if (!text || isProfileChromeText(text) || matchSectionLabel(text)) return;
+      if (looksLikeStatsSummary(text)) {
+        if (!summary) summary = text;
+        return;
+      }
       var key = text.toLowerCase();
-      if (seen[key]) return;
-      // Skip obvious chrome / our UI / single icon glyphs
-      if (/^(message|send|back|close|favorite|pin|chat|map|saved)$/i.test(text)) return;
-      seen[key] = true;
-      lines.push({ text: text, weight: weight || 0 });
+      if (seenValue["note::" + key]) return;
+      seenValue["note::" + key] = true;
+      notes.push(text);
     }
 
     var headline =
       qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
       qs('[data-testid*="profileHeadline"]', profile) ||
       qs('[data-testid*="Headline"]', profile);
-    if (headline) addLine(headline.textContent, 10);
-
-    var titleBits = qsa("h1, h2, h3, [class*='headline'], [class*='title']", profile);
-    for (var t = 0; t < titleBits.length; t++) addLine(titleBits[t].textContent, 8);
-
-    // Stats / chips / tags often sit under the photo (covered by our bar)
-    var chips = qsa(
-      '[class*="tag"], [class*="chip"], [class*="badge"], [class*="stat"], [class*="trait"], [role="listitem"]',
-      profile
-    );
-    for (var c = 0; c < chips.length; c++) {
-      if (isOurUi(chips[c])) continue;
-      addLine(chips[c].textContent, 5);
+    if (headline) {
+      var ht = cleanProfileText(headline.textContent);
+      if (ht && !isProfileChromeText(ht)) title = ht.slice(0, 80);
     }
 
-    var paras = qsa("p, li, [class*='about'], [class*='bio'], [class*='description'], td, th", profile);
-    for (var p = 0; p < paras.length; p++) {
-      if (isOurUi(paras[p])) continue;
-      addLine(paras[p].textContent, 3);
+    // 1) Structured rows: label node + nearby value/chips (native layout)
+    var all = qsa("*", profile);
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i];
+      if (isOurUi(el) || el.children.length > 8) continue;
+      var own = "";
+      try {
+        // Direct text only (avoid swallowing whole sections)
+        for (var n = 0; n < el.childNodes.length; n++) {
+          if (el.childNodes[n].nodeType === 3) own += el.childNodes[n].textContent || "";
+        }
+      } catch (e) {}
+      own = cleanProfileText(own || (el.children.length === 0 ? el.textContent : ""));
+      var label = matchSectionLabel(own);
+      if (!label || own.toLowerCase() !== label.toLowerCase()) {
+        // Also accept exact textContent when leaf-ish
+        if (el.children.length <= 1) label = matchSectionLabel(cleanProfileText(el.textContent));
+        else label = null;
+      }
+      if (!label) continue;
+      if (cleanProfileText(el.textContent).length > label.length + 60) continue;
+
+      var values = [];
+      var sib = el.nextElementSibling;
+      var hops = 0;
+      while (sib && hops < 4) {
+        if (!isOurUi(sib)) {
+          var st = cleanProfileText(sib.textContent);
+          if (st && !matchSectionLabel(st)) {
+            values = values.concat(splitChipValues(st));
+            break;
+          }
+          // Chip children
+          var kids = qsa(
+            '[class*="tag"], [class*="chip"], [class*="badge"], [class*="pill"], button, span',
+            sib
+          );
+          if (kids.length) {
+            for (var k = 0; k < kids.length; k++) {
+              var kt = cleanProfileText(kids[k].textContent);
+              if (kt && kt.length < 40 && !matchSectionLabel(kt)) values.push(kt);
+            }
+            if (values.length) break;
+          }
+        }
+        sib = sib.nextElementSibling;
+        hops++;
+      }
+      // Parent row: label + value columns
+      if (!values.length && el.parentElement) {
+        var parent = el.parentElement;
+        var siblings = parent.children;
+        for (var s = 0; s < siblings.length; s++) {
+          if (siblings[s] === el || isOurUi(siblings[s])) continue;
+          var pt = cleanProfileText(siblings[s].textContent);
+          if (!pt || matchSectionLabel(pt) === label) continue;
+          if (pt.toLowerCase().indexOf(label.toLowerCase()) === 0) {
+            pt = pt.slice(label.length).replace(/^[:\-\s]+/, "");
+          }
+          if (pt && pt.length < 200) values = values.concat(splitChipValues(pt));
+        }
+      }
+      if (values.length) addValues(label, values);
     }
 
-    // Last resort: split visible text blocks
-    if (lines.length < 2) {
-      var raw = stripControls(profile.innerText || profile.textContent || "")
-        .split(/\n+/)
-        .map(function (s) {
-          return s.replace(/\s+/g, " ").trim();
-        });
-      for (var i = 0; i < raw.length; i++) addLine(raw[i], 1);
+    // 2) Parse full visible text into labeled sections (fallback / fill gaps)
+    var rawLines = cleanProfileText(profile.innerText || "")
+      .split(/\n+/)
+      .map(function (line) {
+        return cleanProfileText(line);
+      })
+      .filter(Boolean);
+
+    var currentLabel = null;
+    for (var r = 0; r < rawLines.length; r++) {
+      var line = rawLines[r];
+      if (isProfileChromeText(line)) continue;
+
+      var exact = matchSectionLabel(line);
+      if (exact && line.toLowerCase() === exact.toLowerCase()) {
+        currentLabel = exact;
+        ensureSection(exact);
+        continue;
+      }
+
+      // "HIV Status Negative, On PrEP"
+      var prefixed = null;
+      for (var li = 0; li < PROFILE_SECTION_LABELS.length; li++) {
+        var lab = PROFILE_SECTION_LABELS[li];
+        var re = new RegExp("^" + lab.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*[:\\-]?\\s+(.+)$", "i");
+        var m = line.match(re);
+        if (m) {
+          prefixed = lab;
+          addValues(lab, splitChipValues(m[1]));
+          currentLabel = lab;
+          break;
+        }
+      }
+      if (prefixed) continue;
+
+      if (looksLikeStatsSummary(line)) {
+        if (!summary) summary = line;
+        currentLabel = null;
+        continue;
+      }
+
+      if (/^(i'?m hosting|can host|can travel|not hosting)/i.test(line)) {
+        addValues("Location", [line]);
+        currentLabel = "Location";
+        continue;
+      }
+
+      if (currentLabel) {
+        addValues(currentLabel, splitChipValues(line));
+      } else if (
+        /cruiser|verified|registered|anonymous/i.test(line) &&
+        line.length < 40
+      ) {
+        title = line.slice(0, 80);
+      } else if (line.length >= 8) {
+        addNote(line);
+      }
     }
 
-    lines.sort(function (a, b) {
-      return b.weight - a.weight;
+    // 3) Chip / tag sweep into notes if still empty
+    if (!sections.length && !summary) {
+      var chips = qsa(
+        '[class*="tag"], [class*="chip"], [class*="badge"], [class*="stat"], [class*="trait"]',
+        profile
+      );
+      for (var c = 0; c < chips.length; c++) {
+        if (isOurUi(chips[c])) continue;
+        addNote(chips[c].textContent);
+      }
+    }
+
+    // Drop empty sections
+    sections = sections.filter(function (sec) {
+      return sec.values && sec.values.length;
     });
 
-    var title = lines.length ? lines[0].text : "Profile details";
-    var body = lines
-      .slice(title === (lines[0] && lines[0].text) ? 1 : 0)
-      .map(function (l) {
-        return l.text;
-      })
-      .filter(function (t, idx, arr) {
-        return arr.indexOf(t) === idx;
-      })
-      .slice(0, 40);
+    // Prefer a clean title
+    if (/^profile/i.test(title) && summary) title = summary.split(",")[0].trim() || title;
 
-    return { title: title.slice(0, 80), lines: body };
+    return {
+      title: title,
+      summary: summary,
+      sections: sections,
+      notes: notes.slice(0, 12),
+      // legacy field for harness / callers
+      lines: sections.reduce(function (acc, sec) {
+        return acc.concat([sec.label + ": " + sec.values.join(", ")]);
+      }, summary ? [summary] : [])
+    };
   }
 
   function scrollProfileDetailsIntoView() {
@@ -1615,6 +1845,66 @@
     try {
       target.scrollIntoView({ block: "center", behavior: "smooth" });
     } catch (e) {}
+  }
+
+  function makeDetailsSectionEl(section) {
+    var wrap = document.createElement("div");
+    Object.assign(wrap.style, {
+      padding: "12px 0",
+      borderBottom: "1px solid " + THEME.border
+    });
+
+    var lab = document.createElement("div");
+    lab.textContent = section.label;
+    Object.assign(lab.style, {
+      fontSize: "12px",
+      fontWeight: "650",
+      letterSpacing: "0.04em",
+      textTransform: "uppercase",
+      color: THEME.textMute,
+      marginBottom: "8px"
+    });
+    wrap.appendChild(lab);
+
+    var chipRow = document.createElement("div");
+    Object.assign(chipRow.style, {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "7px"
+    });
+
+    var multi = section.values.length > 1 || section.values[0].length < 28;
+    section.values.forEach(function (val) {
+      if (multi) {
+        var chip = document.createElement("span");
+        chip.textContent = val;
+        Object.assign(chip.style, {
+          display: "inline-flex",
+          alignItems: "center",
+          padding: "6px 11px",
+          borderRadius: "999px",
+          background: THEME.chipBg,
+          border: "1px solid " + THEME.border,
+          color: THEME.text,
+          fontSize: "13px",
+          lineHeight: "1.25",
+          fontWeight: "500"
+        });
+        chipRow.appendChild(chip);
+      } else {
+        var plain = document.createElement("div");
+        plain.textContent = val;
+        Object.assign(plain.style, {
+          fontSize: "15px",
+          lineHeight: "1.4",
+          color: THEME.text,
+          fontWeight: "500"
+        });
+        chipRow.appendChild(plain);
+      }
+    });
+    wrap.appendChild(chipRow);
+    return wrap;
   }
 
   function renderProfileDetailsModal() {
@@ -1658,24 +1948,29 @@
     Object.assign(title.style, {
       fontWeight: "650",
       fontSize: "18px",
-      marginBottom: "6px",
+      marginBottom: data.summary ? "8px" : "14px",
       lineHeight: "1.3"
     });
     sheet.appendChild(title);
 
-    var hint = document.createElement("div");
-    hint.textContent = "Pulled from the open profile (details often sit under the bar).";
-    Object.assign(hint.style, {
-      color: THEME.textMute,
-      fontSize: "12px",
-      marginBottom: "14px",
-      lineHeight: "1.4"
-    });
-    sheet.appendChild(hint);
+    if (data.summary) {
+      var sum = document.createElement("div");
+      sum.textContent = data.summary;
+      Object.assign(sum.style, {
+        fontSize: "14px",
+        lineHeight: "1.4",
+        color: THEME.textDim,
+        marginBottom: "14px",
+        paddingBottom: "12px",
+        borderBottom: "1px solid " + THEME.border
+      });
+      sheet.appendChild(sum);
+    }
 
-    if (!data.lines.length) {
+    if (!data.sections.length && !data.notes.length && !data.summary) {
       var empty = document.createElement("div");
-      empty.textContent = "Couldn't read extra details — try scrolling the profile, then open Details again.";
+      empty.textContent =
+        "Couldn't read profile sections — swipe up on the photo for native details, or scroll the profile and try again.";
       Object.assign(empty.style, {
         color: THEME.textDim,
         fontSize: "14px",
@@ -1684,18 +1979,17 @@
       });
       sheet.appendChild(empty);
     } else {
-      data.lines.forEach(function (line) {
-        var row = document.createElement("div");
-        row.textContent = line;
-        Object.assign(row.style, {
-          fontSize: "14px",
-          lineHeight: "1.45",
-          padding: "10px 0",
-          borderBottom: "1px solid " + THEME.border,
-          color: THEME.text
-        });
-        sheet.appendChild(row);
+      data.sections.forEach(function (sec) {
+        sheet.appendChild(makeDetailsSectionEl(sec));
       });
+      if (data.notes.length) {
+        sheet.appendChild(
+          makeDetailsSectionEl({
+            label: "More",
+            values: data.notes
+          })
+        );
+      }
     }
 
     var actions = document.createElement("div");
@@ -1705,7 +1999,7 @@
       marginTop: "16px"
     });
     var msgBtn = makeBtn(
-      "✉  Message",
+      "Message",
       function () {
         overlay.remove();
         cmdStartChat();
@@ -2739,6 +3033,8 @@
         cmdShowProfileDetails: cmdShowProfileDetails,
         cmdStartChat: cmdStartChat,
         classifyProfileRail: classifyProfileRail,
+        scrapeProfileDetails: scrapeProfileDetails,
+        renderProfileDetailsModal: renderProfileDetailsModal,
         SEL: SEL,
         version: VERSION
       };

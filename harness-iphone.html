@@ -82,13 +82,16 @@
     function sceneProfile() {
       clearFixture();
       fixture.innerHTML = `
-        <app-profile style="display:block;position:relative;width:360px;height:480px">
-          <img alt="profile" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" style="width:100%;height:280px;object-fit:cover;background:#333" />
+        <app-profile style="display:block;position:relative;width:360px;height:640px">
+          <img alt="profile" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" style="width:100%;height:220px;object-fit:cover;background:#333" />
           <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
-          <div class="stats">21, 145lb</div>
-          <p class="about">Into pups and hosting downtown.</p>
-          <span class="tag">Vers</span>
-          <span class="tag">Host</span>
+          <div class="stats">27m, 5'9", muscular, top</div>
+          <div class="profile-section"><div>Location</div><div>Can host</div></div>
+          <div class="profile-section"><div>Into Public</div><div>Cars Beaches Outdoors Parks Restrooms Saunas</div></div>
+          <div class="profile-section"><div>HIV Status</div><div>Negative, On PrEP</div></div>
+          <div class="profile-section"><div>HIV Tested</div><div>Mar 28, 2026</div></div>
+          <div class="profile-section"><div>STI Tested</div><div>Mar 28, 2026</div></div>
+          <div class="profile-section"><div>Safeguards</div><div>DoxyPEP COVID Vaccinated</div></div>
           <div class="profile-rail">
             <button aria-label="Report Cruiser" title="Report">S</button>
             <button aria-label="Pin for Later" title="Favorite">*</button>
@@ -204,18 +207,23 @@
       log(assert(!!side.querySelector('[data-cmd="message"]'), "sidebar has Message"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
 
-      // Details clicks labeled Profile info — never Photos/gallery
-      let nativeInfo = false;
+      // Details opens our sectioned sheet (not gallery / not flat word dump)
       let nativePhotos = false;
-      const infoBtn = document.querySelector('app-profile button[aria-label="Profile info"]');
       const photosBtn = document.querySelector('app-profile button[aria-label="Photos"]');
-      if (infoBtn) infoBtn.addEventListener("click", () => { nativeInfo = true; }, { once: true });
       if (photosBtn) photosBtn.addEventListener("click", () => { nativePhotos = true; }, { once: true });
       side.querySelector('[data-cmd="details"]').click();
-      await wait(80);
-      log(assert(nativeInfo, "Details clicks native Profile info"));
+      await wait(100);
+      const detailsSheet = document.getElementById("sniffies-iphone-profile-details");
+      const sheetText = detailsSheet?.textContent || "";
+      log(assert(!!detailsSheet, "Details opens sectioned sheet"));
       log(assert(!nativePhotos, "Details does not open Photos/gallery"));
-      document.getElementById("sniffies-iphone-profile-details")?.remove();
+      log(assert(/HIV Status/i.test(sheetText), "details sheet has HIV Status section"));
+      log(assert(/Into Public/i.test(sheetText), "details sheet has Into Public section"));
+      log(assert(/Can host|Negative|PrEP|Cars/i.test(sheetText), "details sheet includes section values"));
+      log(assert(!/Pulled from the open profile/i.test(sheetText), "old flat hint removed"));
+      const scraped = api.scrapeProfileDetails?.();
+      log(assert(!!scraped?.sections?.length, "scrape returns labeled sections"));
+      detailsSheet?.remove();
 
       // Star → Pin for Later
       let nativePin = false;
