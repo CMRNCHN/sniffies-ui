@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.2
+// @version      1.2.3
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.2.2";
+  var VERSION = "1.2.3";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -2198,28 +2198,88 @@
     return false;
   }
 
+  function profileIdFromLocation() {
+    var m = (location.pathname || "").match(/\/profile\/([^/]+)/i);
+    return m ? m[1] : null;
+  }
+
+  function profileIdFromDom() {
+    var id = profileIdFromLocation();
+    if (id) return id;
+    var links = qsa('a[href*="/profile/"]');
+    for (var i = 0; i < links.length; i++) {
+      if (isOurUi(links[i])) continue;
+      var hm = String(links[i].getAttribute("href") || "").match(/\/profile\/([^/]+)/i);
+      if (hm) return hm[1];
+    }
+    return null;
+  }
+
+  /** Last-resort: open /profile/:id/chat when the native Message CTA can't be clicked. */
+  function tryOpenProfileChatRoute(toast) {
+    if (isProfileChatPath()) return false;
+    var id = profileIdFromDom();
+    if (!id) return false;
+    var path = "/profile/" + id + "/chat";
+    var link =
+      qs('a[href="' + path + '"]') ||
+      qs('a[href*="/profile/' + id + '/chat"]') ||
+      qs('[ng-reflect-router-link*="chat"]');
+    if (link && !isOurUi(link) && clickNative(link, toast || "Message")) return true;
+    try {
+      if (toast) showToast(toast || "Opening chat…", "success");
+      location.assign(path);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function ensureOpenedChat(toast) {
+    var tries = 0;
+    function tick() {
+      tries++;
+      if (isProfileChatPath() || isChatThreadOpen()) {
+        focusChatComposer(toast || "Type your message");
+        return;
+      }
+      if (tries === 3 && tryOpenProfileChatRoute(null)) return;
+      if (tries < 8) setTimeout(tick, 180);
+    }
+    setTimeout(tick, 200);
+  }
+
   function cmdStartChat() {
-    // Private-chat URL → focus composer (no Message CTA on that route)
-    if (isProfileChatPath()) {
+    closeModals();
+
+    // Already in a private thread
+    if (isProfileChatPath() || (isChatThreadOpen() && !findProfileHost())) {
       if (focusChatComposer("Type your message")) return;
     }
 
     var profile = findProfileHost();
     if (profile) {
-      // Scroll to the below-the-fold text "Message" CTA and click it
-      if (activateNativeMessageControl("Message")) return;
+      // 1) Native text Message CTA (scroll into view if below the fold)
+      if (activateNativeMessageControl("Message")) {
+        ensureOpenedChat("Type your message");
+        return;
+      }
 
+      // 2) Labeled rail Message only
       var rail = classifyProfileRail();
-      // Only use rail Message if it's a real messageish control (never a position guess)
       if (
         rail.message &&
         isMessageish(railLabelFor(rail.message)) &&
         clickNative(rail.message, "Message")
       ) {
+        ensureOpenedChat("Type your message");
         return;
       }
 
-      // Compose-on-profile already open
+      // 3) Route fallback — locks profile → individual chat
+      if (tryOpenProfileChatRoute("Message")) return;
+
+      // 4) Compose-on-profile already open
       if (focusChatComposer("Type your message")) return;
 
       dumpProfileDebug().then(function () {
@@ -2229,6 +2289,7 @@
     }
 
     if (isChatThreadOpen() && focusChatComposer("Type your message")) return;
+    if (tryOpenProfileChatRoute("Message")) return;
     showToast("Open a profile first", "error");
   }
 
@@ -2386,10 +2447,102 @@
     );
   }
 
+  function extractBioText(profile) {
+    if (!profile) return "";
+    var best = "";
+    var nodes = qsa(
+      '[data-testid*="bio"], [data-testid*="Bio"], [data-testid*="about"], [data-testid*="About"], [class*="bio"], [class*="Bio"], [class*="about-me"], [class*="aboutMe"], [class*="description"], profile-bio, app-profile-bio',
+      profile
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      if (isOurUi(nodes[i])) continue;
+      var t = cleanProfileText(nodes[i].textContent);
+      if (!t || t.length < 12 || t.length > 600) continue;
+      if (matchSectionLabel(t) || looksLikeStatsSummary(t) || isProfileChromeText(t)) continue;
+      if (/^(location|into|looking|hiv|practices|safeguards)/i.test(t)) continue;
+      if (t.length > best.length) best = t;
+    }
+    return best;
+  }
+
+  function noteDuplicatesSectionContent(note, sections, summary) {
+    var n = cleanProfileText(note).toLowerCase();
+    if (!n) return true;
+    if (summary) {
+      var s = summary.toLowerCase();
+      if (n === s || n.indexOf(s) !== -1 || s.indexOf(n) !== -1) return true;
+    }
+    var blobParts = [];
+    for (var i = 0; i < sections.length; i++) {
+      var sec = sections[i];
+      for (var j = 0; j < sec.values.length; j++) {
+        blobParts.push(sec.values[j].toLowerCase());
+      }
+      blobParts.push(sec.values.join(" ").toLowerCase());
+      blobParts.push(sec.values.join(", ").toLowerCase());
+      blobParts.push((sec.label + " " + sec.values.join(" ")).toLowerCase());
+    }
+    for (var k = 0; k < blobParts.length; k++) {
+      var b = blobParts[k];
+      if (!b) continue;
+      if (n === b) return true;
+      if (b.length >= 6 && n.indexOf(b) !== -1) return true;
+      if (n.length >= 8 && b.indexOf(n) !== -1) return true;
+    }
+    var words = n.split(/\s+/).filter(function (w) {
+      return w.length > 2;
+    });
+    if (words.length >= 3) {
+      var blob = blobParts.join(" ");
+      var hit = 0;
+      for (var w = 0; w < words.length; w++) {
+        if (blob.indexOf(words[w]) !== -1) hit++;
+      }
+      if (hit / words.length >= 0.72) return true;
+    }
+    return false;
+  }
+
+  function orderProfileSections(sections) {
+    var preferred = [
+      "Bio",
+      "Location",
+      "Looking For",
+      "Into Public",
+      "Into",
+      "Interaction",
+      "Fetishes",
+      "Kinks",
+      "Practices",
+      "HIV Status",
+      "HIV Tested",
+      "STI Tested",
+      "Safeguards",
+      "My Comfort Levels",
+      "I carry",
+      "I carry...",
+      "Hosting Status",
+      "Hosting",
+      "Identity",
+      "Scene",
+      "Health",
+      "Stats"
+    ];
+    sections.sort(function (a, b) {
+      var ia = preferred.indexOf(a.label);
+      var ib = preferred.indexOf(b.label);
+      if (ia < 0) ia = 80;
+      if (ib < 0) ib = 80;
+      if (ia !== ib) return ia - ib;
+      return String(a.label).localeCompare(String(b.label));
+    });
+    return sections;
+  }
+
   function scrapeProfileDetails() {
     var profile = findProfileHost() || qs(SEL.profile);
     if (!profile) {
-      return { title: "Profile", summary: "", sections: [], notes: [] };
+      return { title: "Profile", summary: "", sections: [], notes: [], bio: "" };
     }
 
     var sections = [];
@@ -2398,6 +2551,7 @@
     var seenValue = {};
     var summary = "";
     var title = "Profile details";
+    var bio = extractBioText(profile);
 
     function ensureSection(label) {
       if (sectionMap[label]) return sectionMap[label];
@@ -2432,11 +2586,14 @@
         if (!summary) summary = text;
         return;
       }
+      if (bio && text.toLowerCase() === bio.toLowerCase()) return;
       var key = text.toLowerCase();
       if (seenValue["note::" + key]) return;
       seenValue["note::" + key] = true;
       notes.push(text);
     }
+
+    if (bio) addValues("Bio", [bio]);
 
     var headline =
       qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
@@ -2654,14 +2811,24 @@
       return sec.values && sec.values.length;
     });
 
+    // Ensure bio is always present/first when we found one
+    if (bio && !sectionMap.Bio) addValues("Bio", [bio]);
+    sections = orderProfileSections(sections);
+
+    // Drop "More" noise that repeats labeled sections / summary / bio
+    notes = notes.filter(function (n) {
+      return !noteDuplicatesSectionContent(n, sections, summary || bio);
+    });
+
     // Prefer a clean title
     if (/^profile/i.test(title) && summary) title = summary.split(",")[0].trim() || title;
 
     return {
       title: title,
       summary: summary,
+      bio: bio,
       sections: sections,
-      notes: notes.slice(0, 12),
+      notes: notes.slice(0, 8),
       // legacy field for harness / callers
       lines: sections.reduce(function (acc, sec) {
         return acc.concat([sec.label + ": " + sec.values.join(", ")]);
@@ -2689,21 +2856,43 @@
     } catch (e) {}
   }
 
+  function accentForSectionLabel(label) {
+    var fixed = {
+      Bio: "#6eb0ff",
+      Location: "#3dd68c",
+      "Looking For": "#f0a43a",
+      "Into Public": "#c4a7ff",
+      Into: "#c4a7ff",
+      "HIV Status": "#ff8fab",
+      Safeguards: "#5eead4",
+      Practices: "#fbbf24"
+    };
+    if (fixed[label]) return fixed[label];
+    var palette = ["#6eb0ff", "#f0a43a", "#3dd68c", "#c4a7ff", "#ff8fab", "#5eead4", "#fbbf24"];
+    var h = 0;
+    var s = String(label || "");
+    for (var i = 0; i < s.length; i++) h = (h + s.charCodeAt(i) * (i + 3)) % 997;
+    return palette[h % palette.length];
+  }
+
   function makeDetailsSectionEl(section) {
+    var accent = accentForSectionLabel(section.label);
     var wrap = document.createElement("div");
     Object.assign(wrap.style, {
-      padding: "12px 0",
-      borderBottom: "1px solid " + THEME.border
+      padding: "12px 0 12px 12px",
+      margin: "4px 0",
+      borderBottom: "1px solid " + THEME.border,
+      borderLeft: "3px solid " + accent
     });
 
     var lab = document.createElement("div");
     lab.textContent = section.label;
     Object.assign(lab.style, {
-      fontSize: "12px",
-      fontWeight: "650",
-      letterSpacing: "0.04em",
+      fontSize: "11px",
+      fontWeight: "700",
+      letterSpacing: "0.08em",
       textTransform: "uppercase",
-      color: THEME.textMute,
+      color: accent,
       marginBottom: "8px"
     });
     wrap.appendChild(lab);
@@ -2715,7 +2904,8 @@
       gap: "7px"
     });
 
-    var multi = section.values.length > 1 || section.values[0].length < 28;
+    var isBio = String(section.label).toLowerCase() === "bio";
+    var multi = !isBio && (section.values.length > 1 || section.values[0].length < 28);
     section.values.forEach(function (val) {
       if (multi) {
         var chip = document.createElement("span");
@@ -2725,8 +2915,8 @@
           alignItems: "center",
           padding: "6px 11px",
           borderRadius: "999px",
-          background: THEME.chipBg,
-          border: "1px solid " + THEME.border,
+          background: "rgba(255,255,255,0.04)",
+          border: "1px solid " + accent + "44",
           color: THEME.text,
           fontSize: "13px",
           lineHeight: "1.25",
@@ -2737,10 +2927,11 @@
         var plain = document.createElement("div");
         plain.textContent = val;
         Object.assign(plain.style, {
-          fontSize: "15px",
-          lineHeight: "1.4",
+          fontSize: isBio ? "15px" : "15px",
+          lineHeight: "1.45",
           color: THEME.text,
-          fontWeight: "500"
+          fontWeight: isBio ? "450" : "500",
+          whiteSpace: "pre-wrap"
         });
         chipRow.appendChild(plain);
       }
@@ -2772,41 +2963,52 @@
 
     var sheet = document.createElement("div");
     Object.assign(sheet.style, {
-      background: THEME.bgSolid,
+      background: "linear-gradient(180deg, #12151c 0%, " + THEME.bgSolid + " 40%)",
       border: "1px solid " + THEME.border,
       borderRadius: "18px 18px 0 0",
-      padding: "18px 16px 28px",
+      padding: "0",
       width: "100%",
       maxHeight: "78vh",
-      overflowY: "auto",
+      display: "flex",
+      flexDirection: "column",
       color: THEME.text,
       fontFamily: "-apple-system, system-ui, sans-serif",
       boxShadow: "0 -12px 40px rgba(0,0,0,0.45)",
-      boxSizing: "border-box"
+      boxSizing: "border-box",
+      overflow: "hidden"
+    });
+
+    var body = document.createElement("div");
+    Object.assign(body.style, {
+      padding: "18px 16px 12px",
+      overflowY: "auto",
+      flex: "1",
+      minHeight: "0"
     });
 
     var title = document.createElement("div");
     title.textContent = data.title || "Profile details";
     Object.assign(title.style, {
-      fontWeight: "650",
-      fontSize: "18px",
-      marginBottom: data.summary ? "8px" : "14px",
-      lineHeight: "1.3"
+      fontWeight: "700",
+      fontSize: "20px",
+      marginBottom: data.summary ? "6px" : "12px",
+      lineHeight: "1.25",
+      letterSpacing: "-0.01em"
     });
-    sheet.appendChild(title);
+    body.appendChild(title);
 
     if (data.summary) {
       var sum = document.createElement("div");
       sum.textContent = data.summary;
       Object.assign(sum.style, {
-        fontSize: "14px",
+        fontSize: "13px",
         lineHeight: "1.4",
         color: THEME.textDim,
         marginBottom: "14px",
         paddingBottom: "12px",
         borderBottom: "1px solid " + THEME.border
       });
-      sheet.appendChild(sum);
+      body.appendChild(sum);
     }
 
     if (!data.sections.length && !data.notes.length && !data.summary) {
@@ -2819,13 +3021,13 @@
         lineHeight: "1.45",
         marginBottom: "12px"
       });
-      sheet.appendChild(empty);
+      body.appendChild(empty);
     } else {
       data.sections.forEach(function (sec) {
-        sheet.appendChild(makeDetailsSectionEl(sec));
+        body.appendChild(makeDetailsSectionEl(sec));
       });
       if (data.notes.length) {
-        sheet.appendChild(
+        body.appendChild(
           makeDetailsSectionEl({
             label: "More",
             values: data.notes
@@ -2838,22 +3040,23 @@
     Object.assign(actions.style, {
       display: "flex",
       gap: "8px",
-      marginTop: "4px",
-      marginBottom: "14px"
+      padding: "12px 16px calc(12px + env(safe-area-inset-bottom, 0px))",
+      borderTop: "1px solid " + THEME.border,
+      background: "rgba(12,14,18,0.96)",
+      flexShrink: "0"
     });
     var msgBtn = makeBtn(
       "Message",
       function () {
         overlay.remove();
-        // Same path as sidebar — scroll to native CTA + click
         setTimeout(function () {
           cmdStartChat();
         }, 40);
       },
       { bg: THEME.accentBg, color: "#fff", bold: true, primary: true }
     );
-    msgBtn.style.flex = "1";
-    msgBtn.style.minHeight = "44px";
+    msgBtn.style.flex = "1.4";
+    msgBtn.style.minHeight = "46px";
     var done = makeBtn(
       "Done",
       function () {
@@ -2862,16 +3065,12 @@
       { color: THEME.textDim }
     );
     done.style.flex = "1";
-    done.style.minHeight = "44px";
+    done.style.minHeight = "46px";
     actions.appendChild(msgBtn);
     actions.appendChild(done);
-    // Pin actions under the title so Message is always reachable without scrolling
-    if (sheet.childNodes.length > 1) {
-      sheet.insertBefore(actions, sheet.childNodes[1]);
-    } else {
-      sheet.appendChild(actions);
-    }
 
+    sheet.appendChild(body);
+    sheet.appendChild(actions);
     overlay.appendChild(sheet);
     document.body.appendChild(overlay);
   }
@@ -3091,34 +3290,25 @@
       zIndex: "1000014",
       display: "flex",
       flexDirection: "column",
-      gap: "0",
-      padding: "4px 8px 3px",
+      gap: "4px",
+      padding: "5px 10px 5px",
       boxSizing: "border-box",
       background: THEME.dockBg,
       borderTop: "1px solid " + THEME.border,
       borderBottom: "none",
-      borderRadius: "12px 12px 0 0",
+      borderRadius: "14px 14px 0 0",
       boxShadow: "none",
       backdropFilter: "blur(20px) saturate(1.25)",
       webkitBackdropFilter: "blur(20px) saturate(1.25)"
     });
 
-    // Single short row: · ·· ··· pics | Message… | send  (no word chips)
-    var dockRow = document.createElement("div");
-    Object.assign(dockRow.style, {
-      display: "flex",
-      alignItems: "center",
-      gap: "5px",
-      minHeight: "36px"
-    });
-
+    // Marks row ABOVE the input (short) — does not sit beside the text box
     var marks = document.createElement("div");
     Object.assign(marks.style, {
       display: "flex",
       alignItems: "center",
-      gap: "3px",
-      flexShrink: "0",
-      maxWidth: "42%",
+      gap: "4px",
+      height: "22px",
       overflowX: "auto",
       webkitOverflowScrolling: "touch",
       scrollbarWidth: "none"
@@ -3134,11 +3324,11 @@
           setComposerText(text);
         }
       });
-      chip.style.width = "24px";
-      chip.style.minWidth = "24px";
-      chip.style.height = "24px";
-      chip.style.minHeight = "24px";
-      chip.style.fontSize = "11px";
+      chip.style.width = "22px";
+      chip.style.minWidth = "22px";
+      chip.style.height = "22px";
+      chip.style.minHeight = "22px";
+      chip.style.fontSize = "10px";
       marks.appendChild(chip);
     });
     var pics = makeMarkChip({
@@ -3148,18 +3338,26 @@
       color: THEME.gold,
       action: cmdPics
     });
-    pics.style.width = "24px";
-    pics.style.minWidth = "24px";
-    pics.style.height = "24px";
-    pics.style.minHeight = "24px";
+    pics.style.width = "22px";
+    pics.style.minWidth = "22px";
+    pics.style.height = "22px";
+    pics.style.minHeight = "22px";
     marks.appendChild(pics);
-    // AI marks only when a custom endpoint is configured (keeps dock short)
     if (stateData.aiEnabled && stateData.aiEndpoint) {
       appendAiChips(marks, function () {
         renderComposer("CHAT");
       });
     }
-    dockRow.appendChild(marks);
+    el.appendChild(marks);
+
+    // Input row: short field + larger send, same height / flat alignment
+    var inputRow = document.createElement("div");
+    Object.assign(inputRow.style, {
+      display: "flex",
+      alignItems: "stretch",
+      gap: "8px",
+      height: "40px"
+    });
 
     var ta = document.createElement("textarea");
     ta.rows = 1;
@@ -3168,33 +3366,25 @@
     Object.assign(ta.style, {
       flex: "1",
       resize: "none",
-      minHeight: "32px",
-      maxHeight: "64px",
-      padding: "6px 10px",
-      borderRadius: "16px",
+      height: "40px",
+      minHeight: "40px",
+      maxHeight: "40px",
+      padding: "10px 12px",
+      borderRadius: "12px",
       border: "1px solid " + THEME.border,
       background: THEME.inputBg,
       color: THEME.text,
       fontSize: "16px",
       lineHeight: "1.2",
       fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
-      outline: "none"
+      outline: "none",
+      boxSizing: "border-box"
     });
     ta.addEventListener("focus", function () {
       ta.style.borderColor = THEME.accent;
     });
     ta.addEventListener("blur", function () {
       ta.style.borderColor = THEME.border;
-    });
-    ta.addEventListener("input", function () {
-      ta.style.height = "auto";
-      ta.style.height = Math.min(64, ta.scrollHeight) + "px";
-      var m = measureDockHeight();
-      document.documentElement.style.setProperty("--sniffies-iphone-dock-h", m.dockH + "px");
-      document.documentElement.style.setProperty(
-        "--sniffies-iphone-inset-bottom",
-        m.dockH + 12 + "px"
-      );
     });
     ta.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -3206,15 +3396,14 @@
     var sendBtn = document.createElement("button");
     sendBtn.type = "button";
     sendBtn.setAttribute("aria-label", "Send");
-    sendBtn.appendChild(makeSvgIcon("send", 15));
+    sendBtn.textContent = "Send";
     Object.assign(sendBtn.style, {
-      width: "32px",
-      height: "32px",
-      minWidth: "32px",
-      minHeight: "32px",
-      padding: "0",
+      height: "40px",
+      minHeight: "40px",
+      minWidth: "72px",
+      padding: "0 16px",
       border: "none",
-      borderRadius: "50%",
+      borderRadius: "12px",
       background: THEME.accentBg,
       color: "#fff",
       display: "flex",
@@ -3222,7 +3411,12 @@
       justifyContent: "center",
       cursor: "pointer",
       flexShrink: "0",
-      webkitTapHighlightColor: "transparent"
+      fontSize: "15px",
+      fontWeight: "700",
+      letterSpacing: "0.01em",
+      fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
+      webkitTapHighlightColor: "transparent",
+      boxSizing: "border-box"
     });
     sendBtn.addEventListener("click", function (e) {
       e.preventDefault();
@@ -3230,9 +3424,9 @@
       cmdComposerSend();
     });
 
-    dockRow.appendChild(ta);
-    dockRow.appendChild(sendBtn);
-    el.appendChild(dockRow);
+    inputRow.appendChild(ta);
+    inputRow.appendChild(sendBtn);
+    el.appendChild(inputRow);
 
     var bar = document.getElementById(BAR_ID);
     var barH = bar ? Math.ceil(bar.getBoundingClientRect().height) : 52;
@@ -3242,7 +3436,12 @@
     setTimeout(scrollChatToLatest, 80);
     setTimeout(scrollChatToLatest, 320);
 
-    if (!aiSuggestionsCache.length && stateData.aiEnabled && !aiLoading) {
+    if (
+      stateData.aiEnabled &&
+      stateData.aiEndpoint &&
+      !aiSuggestionsCache.length &&
+      !aiLoading
+    ) {
       refreshAiSuggestions(function () {
         if (resolveViewState() === "CHAT" || isChatThreadOpen()) renderComposer("CHAT");
       });
