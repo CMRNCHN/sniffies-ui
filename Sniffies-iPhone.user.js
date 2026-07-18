@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.4
+// @version      1.1.5
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.4";
+  var VERSION = "1.1.5";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -1328,21 +1328,107 @@
     return items;
   }
 
-  function dumpProfileRail() {
+  function copyTextToClipboard(text) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).then(
+          function () {
+            return true;
+          },
+          function () {
+            return copyTextFallback(text);
+          }
+        );
+      }
+    } catch (e) {}
+    return Promise.resolve(copyTextFallback(text));
+  }
+
+  function copyTextFallback(text) {
+    try {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      Object.assign(ta.style, {
+        position: "fixed",
+        left: "0",
+        top: "0",
+        width: "1px",
+        height: "1px",
+        opacity: "0.01",
+        zIndex: "1000100"
+      });
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      ta.setSelectionRange(0, ta.value.length);
+      var ok = document.execCommand("copy");
+      ta.remove();
+      return !!ok;
+    } catch (e2) {
+      return false;
+    }
+  }
+
+  function slimHtml(html, maxLen) {
+    maxLen = maxLen || 120000;
+    html = String(html || "")
+      .replace(/<script[\s\S]*?<\/script>/gi, "")
+      .replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/\sstyle="[^"]*"/gi, function (m) {
+        // keep tiny style hints only if short
+        return m.length > 80 ? "" : m;
+      })
+      .replace(/\n{3,}/g, "\n\n");
+    if (html.length > maxLen) {
+      return html.slice(0, maxLen) + "\n<!-- truncated " + html.length + " chars -->";
+    }
+    return html;
+  }
+
+  function buildProfileDebugDump() {
+    var profile = findProfileHost() || qs(SEL.profile);
     var rail = getProfileActionRail();
     var classified = classifyProfileRail();
-    var dump = {
+
+    // Right-edge HTML slice: clone profile + any right-rail hosts outside it
+    var htmlParts = [];
+    if (profile) {
+      try {
+        htmlParts.push("<!-- app-profile -->\n" + slimHtml(profile.outerHTML, 90000));
+      } catch (e) {}
+    }
+
+    // Compact markup for each detected rail node (best for Message wiring)
+    var railHtml = rail
+      .map(function (item, idx) {
+        try {
+          return (
+            "<!-- rail[" +
+            idx +
+            "] " +
+            (item.aria || item.testid || item.label.slice(0, 40)) +
+            " -->\n" +
+            slimHtml(item.el.outerHTML, 4000)
+          );
+        } catch (e2) {
+          return "<!-- rail[" + idx + "] serialize failed -->";
+        }
+      })
+      .join("\n\n");
+
+    var meta = {
       version: VERSION,
       url: location.href,
       view: resolveViewState(),
       viewport: { w: window.innerWidth, h: window.innerHeight },
       railCount: rail.length,
       classified: {
-        report: !!(classified.report),
-        pin: !!(classified.pin),
-        info: !!(classified.info),
-        photos: !!(classified.photos),
-        message: !!(classified.message)
+        report: !!classified.report,
+        pin: !!classified.pin,
+        info: !!classified.info,
+        photos: !!classified.photos,
+        message: !!classified.message
       },
       items: rail.map(function (item, idx) {
         var r = item.el.getBoundingClientRect();
@@ -1361,27 +1447,39 @@
         };
       })
     };
-    var text = JSON.stringify(dump, null, 2);
-    try {
-      if (navigator.clipboard && navigator.clipboard.writeText) {
-        navigator.clipboard.writeText(text);
+
+    return (
+      "=== SNIFFIES IPHONE PROFILE DUMP v" +
+      VERSION +
+      " ===\n" +
+      JSON.stringify(meta, null, 2) +
+      "\n\n=== RAIL HTML ===\n" +
+      (railHtml || "<!-- no rail nodes found -->") +
+      "\n\n=== PROFILE HTML ===\n" +
+      (htmlParts.join("\n\n") || "<!-- no app-profile -->")
+    );
+  }
+
+  function dumpProfileRail() {
+    return dumpProfileDebug(false);
+  }
+
+  function dumpProfileDebug(includeToastDetail) {
+    var text = buildProfileDebugDump();
+    console.log("[Sniffies iPhone] profile dump\n", text.slice(0, 2000) + "…");
+    return copyTextToClipboard(text).then(function (ok) {
+      if (ok) {
+        showToast(
+          includeToastDetail === false
+            ? "Profile dump copied"
+            : "Profile HTML dump copied — paste in chat",
+          "success"
+        );
       } else {
-        var ta = document.createElement("textarea");
-        ta.value = text;
-        ta.style.position = "fixed";
-        ta.style.left = "-9999px";
-        document.body.appendChild(ta);
-        ta.select();
-        document.execCommand("copy");
-        ta.remove();
+        showToast("Copy failed — try Settings → Copy dump", "error");
       }
-      showToast("Rail dump copied (" + rail.length + ")", "success");
-    } catch (e) {
-      console.log("[Sniffies iPhone] rail dump", dump);
-      showToast("Rail dump logged to console", "error");
-    }
-    console.log("[Sniffies iPhone] rail dump", dump);
-    return dump;
+      return text;
+    });
   }
 
   /** Hide our sidebar briefly and click whatever native control sits under a sidebar btn */
@@ -1603,9 +1701,10 @@
       return;
     }
 
-    // Capture what we saw so you can paste it back here
-    dumpProfileRail();
-    showToast("Message not found — rail dump copied", "error");
+    // Capture HTML + rail so you can paste it back here
+    dumpProfileDebug().then(function () {
+      showToast("Message not found — dump copied", "error");
+    });
   }
 
   function cmdShowProfileDetails() {
@@ -2716,6 +2815,28 @@
       epInput.value = clean;
     };
     sheet.appendChild(epInput);
+
+    sheet.appendChild(makeSectionLabel("Debug (for Message wiring)"));
+    var dbgHint = document.createElement("div");
+    dbgHint.textContent =
+      "Open a profile first, then tap Copy. Paste the dump into Cursor chat.";
+    Object.assign(dbgHint.style, {
+      color: THEME.textMute,
+      fontSize: "12px",
+      marginBottom: "10px",
+      lineHeight: "1.4"
+    });
+    sheet.appendChild(dbgHint);
+    var copyDumpBtn = makeBtn(
+      "Copy profile HTML dump",
+      function () {
+        dumpProfileDebug();
+      },
+      { color: THEME.accent, bold: true }
+    );
+    copyDumpBtn.style.width = "100%";
+    copyDumpBtn.style.minHeight = "44px";
+    sheet.appendChild(copyDumpBtn);
 
     var done = makeBtn(
       "Done",
