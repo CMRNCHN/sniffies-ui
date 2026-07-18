@@ -170,6 +170,7 @@
       log(assert(!!msgCta && msgCta.closest("[data-profile-row]").style.display !== "none", "PROFILE shows Message CTA row"));
       const detailsCta = document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="details"]');
       log(assert(!!detailsCta, "PROFILE shows Details CTA"));
+      log(assert(/Profile details/i.test(detailsCta.textContent || ""), "Details CTA labeled Profile details"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
 
       // Details opens sheet with scraped profile text

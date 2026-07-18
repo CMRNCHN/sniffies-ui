@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.7
+// @version      1.0.8
 // @description  Mobile nav + quick message bar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.0.7";
+  var VERSION = "1.0.8";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -295,7 +295,30 @@
   }
 
   function findProfileHost() {
-    return firstVisible(SEL.profile);
+    var host = firstVisible(SEL.profile);
+    if (host) return host;
+    // Some mobile layouts keep app-profile in DOM with odd visibility — still treat as profile
+    var parked = qs(SEL.profile);
+    if (parked && !isOurUi(parked)) {
+      var r = parked.getBoundingClientRect();
+      if (r.width >= 2 && r.height >= 2) return parked;
+    }
+    var headline =
+      firstVisible('[data-testid="profileHeadlineTableContainer"]') ||
+      firstVisible('[data-testid*="profileHeadline"]') ||
+      firstVisible('[data-testid*="ProfileHeadline"]');
+    if (headline) {
+      return (
+        headline.closest("app-profile") ||
+        headline.closest('[class*="profile"]') ||
+        headline
+      );
+    }
+    var t = titleHint();
+    if (t.indexOf("cruiser profile") !== -1 || t.indexOf("registered cruiser") !== -1) {
+      return qs(SEL.profile) || headline || document.body;
+    }
+    return null;
   }
 
   function getNativeChatTextArea() {
@@ -1449,9 +1472,39 @@
   }
 
   function cmdShowProfileDetails() {
-    if (!findProfileHost()) {
+    var profile = findProfileHost();
+    if (!profile) {
       showToast("Open a profile first", "error");
       return;
+    }
+    // Prefer native details / expand / info if present
+    var natives = qsa('button, [role="button"], a', profile);
+    for (var i = 0; i < natives.length; i++) {
+      var el = natives[i];
+      if (isOurUi(el) || !isVisible(el)) continue;
+      var label = (
+        (el.getAttribute("aria-label") || "") +
+        " " +
+        (el.getAttribute("data-testid") || "") +
+        " " +
+        (el.textContent || "")
+      ).toLowerCase();
+      if (
+        label.indexOf("detail") !== -1 ||
+        label.indexOf("about") !== -1 ||
+        label.indexOf("more info") !== -1 ||
+        label.indexOf("profile info") !== -1 ||
+        label.indexOf("expand") !== -1
+      ) {
+        try {
+          el.scrollIntoView({ block: "center", behavior: "smooth" });
+        } catch (e) {}
+        el.click();
+        showToast("Details", "success");
+        // Still open our sheet so content isn't stuck under the bar
+        setTimeout(renderProfileDetailsModal, 120);
+        return;
+      }
     }
     renderProfileDetailsModal();
   }
@@ -2039,12 +2092,12 @@
 
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "4") return bar;
+    if (bar && bar.getAttribute("data-ready") === "5") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "4");
+    bar.setAttribute("data-ready", "5");
     Object.assign(bar.style, {
       position: "fixed",
       bottom: "0",
@@ -2064,7 +2117,7 @@
       pointerEvents: "auto"
     });
 
-    // Profile-only CTAs above the icon row (native details/message often under the bar)
+    // Profile-only CTAs — stacked so Details + Message stay above the icon bar
     var profileRow = document.createElement("div");
     profileRow.setAttribute("data-profile-row", "1");
     Object.assign(profileRow.style, {
@@ -2072,10 +2125,10 @@
       padding: "8px 10px 0",
       boxSizing: "border-box",
       gap: "8px",
-      flexDirection: "row"
+      flexDirection: "column"
     });
 
-    var detailsCta = makeBtn("ⓘ  Details", null, {
+    var detailsCta = makeBtn("ⓘ  Profile details", null, {
       color: THEME.text,
       bold: true
     });
@@ -2083,7 +2136,7 @@
     detailsCta.setAttribute("aria-label", "Profile details");
     detailsCta.title = "Profile details";
     Object.assign(detailsCta.style, {
-      flex: "1",
+      width: "100%",
       minHeight: "44px",
       height: "44px",
       borderRadius: "12px",
@@ -2100,7 +2153,7 @@
     messageCta.setAttribute("aria-label", "Message this profile");
     messageCta.title = "Message this profile";
     Object.assign(messageCta.style, {
-      flex: "1",
+      width: "100%",
       minHeight: "44px",
       height: "44px",
       borderRadius: "12px",
