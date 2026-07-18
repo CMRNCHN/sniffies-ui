@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.0
+// @version      1.1.1
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.0";
+  var VERSION = "1.1.1";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -41,20 +41,42 @@
   var TOAST_ID = "sniffies-iphone-toast";
   var HIDE_STYLE_ID = "sniffies-iphone-hide-native";
 
-  // Floating white bottom bar (outline-style labels)
+  // Cohesive 24×24 stroke icons (currentColor). Bottom bar + profile sidebar share one set.
   var NAV_ICONS = {
-    back: { glyph: "\u2190", label: "Back" },
-    favorites: { glyph: "\u2606", label: "Favorites" },
-    chats: { glyph: "\uD83D\uDCAC", label: "Chats" },
-    map: { glyph: "\uD83D\uDCCD", label: "Map" },
-    settings: { glyph: "\u2699", label: "Settings" },
-    // kept for chat composer / legacy cmds
-    pinned: { glyph: "\uD83D\uDCCC", label: "Pinned" },
-    message: { glyph: "\u2708", label: "Message" },
-    details: { glyph: "\u24D8", label: "Details" },
-    send: { glyph: "\u27A4", label: "Send" },
-    pics: { glyph: "\uD83D\uDCF7", label: "Pics" },
-    shield: { glyph: "\uD83D\uDEE1", label: "Safety" }
+    back: { icon: "back", label: "Back" },
+    favorites: { icon: "star", label: "Favorites" },
+    chats: { icon: "chat", label: "Chats" },
+    map: { icon: "map", label: "Map" },
+    settings: { icon: "settings", label: "Settings" },
+    pinned: { icon: "pin", label: "Pinned" },
+    message: { icon: "send", label: "Message" },
+    details: { icon: "info", label: "Details" },
+    send: { icon: "send", label: "Send" },
+    pics: { icon: "pics", label: "Send pics" },
+    shield: { icon: "block", label: "Block" }
+  };
+
+  var SVG_PATHS = {
+    back:
+      '<path d="M14.75 5.25 8.5 12l6.25 6.75" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    star:
+      '<path d="M12 3.75l2.2 4.46 4.92.72-3.56 3.47.84 4.9L12 15.1l-4.4 2.3.84-4.9-3.56-3.47 4.92-.72L12 3.75z" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round"/>',
+    chat:
+      '<path d="M7 17.25 4.75 19.5V7.75A2.5 2.5 0 0 1 7.25 5.25h9.5A2.5 2.5 0 0 1 19.25 7.75v6.5a2.5 2.5 0 0 1-2.5 2.5H7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>',
+    map:
+      '<path d="M12 20.5s5.75-4.85 5.75-9.55a5.75 5.75 0 1 0-11.5 0C6.25 15.65 12 20.5 12 20.5z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="10.7" r="2.1" fill="none" stroke="currentColor" stroke-width="1.7"/>',
+    settings:
+      '<circle cx="12" cy="12" r="2.85" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3.6v1.9M12 18.5v1.9M3.6 12h1.9M18.5 12h1.9M6.05 6.05l1.35 1.35M16.6 16.6l1.35 1.35M17.95 6.05l-1.35 1.35M7.4 16.6l-1.35 1.35" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+    pin:
+      '<path d="M12 21V11.5M9.2 5.8a3.4 3.4 0 0 1 5.6 0l.9 1.35H8.3L9.2 5.8zM8.3 7.15h7.4v1.6a2.2 2.2 0 0 1-2.2 2.2h-3a2.2 2.2 0 0 1-2.2-2.2v-1.6z" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/>',
+    block:
+      '<path d="M12 3.4 19.1 6.6v5.4c0 4.55-2.95 7.85-7.1 9.25-4.15-1.4-7.1-4.7-7.1-9.25V6.6L12 3.4z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.2 12h5.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+    info:
+      '<circle cx="12" cy="12" r="8.1" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 10.85V16.4M12 7.7h.01" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round"/>',
+    pics:
+      '<rect x="3.8" y="6.6" width="12.2" height="10.6" rx="1.7" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.8 14.1 6.9 11l3.1 2.95 2.05-1.7 3.95 3.1" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><circle cx="8.1" cy="10" r="1.05" fill="currentColor"/><path d="M14.6 4.8h5.6v5.6" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round" stroke-linejoin="round"/><path d="m20.2 4.8-6.3 6.3" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/>',
+    send:
+      '<path d="M4.4 11.15 19.6 4.55l-4.05 15.1-3.55-5.55-5.5-1.35 5.35-1.75 1.85-4.85z" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linejoin="round"/>'
   };
 
   var DEFAULTS = {
@@ -516,14 +538,7 @@
   }
 
   function makeNavIconBtn(cmd, color) {
-    var meta = NAV_ICONS[cmd] || { glyph: "?", label: cmd };
-    var b = makeIconBtn(meta.glyph, null, color || THEME.textDim);
-    b.setAttribute("data-cmd", cmd);
-    b.setAttribute("aria-label", meta.label);
-    b.title = meta.label;
-    b.style.flex = "1 1 0";
-    b.style.maxWidth = "52px";
-    return b;
+    return makeFloatingNavBtn(cmd);
   }
 
   function makeRow() {
@@ -2232,33 +2247,53 @@
     }
   }
 
+  function makeSvgIcon(iconKey, size) {
+    size = size || 22;
+    var paths = SVG_PATHS[iconKey] || "";
+    var span = document.createElement("span");
+    span.setAttribute("aria-hidden", "true");
+    Object.assign(span.style, {
+      display: "inline-flex",
+      width: size + "px",
+      height: size + "px",
+      lineHeight: "0",
+      pointerEvents: "none"
+    });
+    span.innerHTML =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' +
+      size +
+      '" height="' +
+      size +
+      '" viewBox="0 0 24 24" fill="none">' +
+      paths +
+      "</svg>";
+    return span;
+  }
+
   function makeFloatingNavBtn(cmd) {
-    var meta = NAV_ICONS[cmd] || { glyph: "?", label: cmd };
+    var meta = NAV_ICONS[cmd] || { icon: "back", label: cmd };
     var b = document.createElement("button");
     b.type = "button";
-    b.textContent = meta.glyph;
     b.setAttribute("data-cmd", cmd);
     b.setAttribute("aria-label", meta.label);
     b.title = meta.label;
+    b.appendChild(makeSvgIcon(meta.icon, 21));
     Object.assign(b.style, {
-      width: "48px",
-      height: "48px",
-      minWidth: "48px",
-      minHeight: "48px",
+      width: "40px",
+      height: "36px",
+      minWidth: "40px",
+      minHeight: "36px",
       padding: "0",
       margin: "0",
       border: "none",
       background: "transparent",
       color: THEME.barText,
-      fontSize: cmd === "chats" ? "22px" : "20px",
-      lineHeight: "1",
       cursor: "pointer",
       display: "flex",
       alignItems: "center",
       justifyContent: "center",
-      borderRadius: "14px",
+      borderRadius: "10px",
       flex: "1 1 0",
-      maxWidth: "56px",
       webkitTapHighlightColor: "transparent",
       userSelect: "none",
       touchAction: "manipulation",
@@ -2267,25 +2302,23 @@
     return b;
   }
 
-  function makeSidebarBtn(cmd, glyph, label) {
+  function makeSidebarBtn(cmd, iconKey, label) {
     var b = document.createElement("button");
     b.type = "button";
-    b.textContent = glyph;
     b.setAttribute("data-cmd", cmd);
     b.setAttribute("aria-label", label);
     b.title = label;
+    b.appendChild(makeSvgIcon(iconKey, 22));
     Object.assign(b.style, {
-      width: "44px",
-      height: "44px",
-      minWidth: "44px",
-      minHeight: "44px",
+      width: "40px",
+      height: "40px",
+      minWidth: "40px",
+      minHeight: "40px",
       padding: "0",
       margin: "0",
       border: "none",
       background: "transparent",
-      color: "rgba(255,255,255,0.92)",
-      fontSize: "20px",
-      lineHeight: "1",
+      color: "rgba(255,255,255,0.94)",
       cursor: "pointer",
       display: "flex",
       alignItems: "center",
@@ -2300,27 +2333,28 @@
 
   function ensureSidebar() {
     var side = document.getElementById(SIDEBAR_ID);
-    if (side && side.getAttribute("data-ready") === "1") return side;
+    if (side && side.getAttribute("data-ready") === "2") return side;
 
     if (side) side.remove();
     side = document.createElement("div");
     side.id = SIDEBAR_ID;
-    side.setAttribute("data-ready", "1");
+    side.setAttribute("data-ready", "2");
     Object.assign(side.style, {
       position: "fixed",
-      top: "50%",
+      top: "auto",
       right: "10px",
-      transform: "translateY(-54%)",
+      bottom: "160px",
+      transform: "none",
       zIndex: "1000016",
       display: "none",
       flexDirection: "column",
       alignItems: "center",
       justifyContent: "center",
-      gap: "10px",
-      padding: "12px 8px",
+      gap: "8px",
+      padding: "10px 7px",
       boxSizing: "border-box",
-      width: "56px",
-      borderRadius: "22px",
+      width: "52px",
+      borderRadius: "20px",
       background: THEME.sidebarBg,
       border: "1px solid " + THEME.sidebarBorder,
       boxShadow: "0 10px 28px rgba(0,0,0,0.38)",
@@ -2329,12 +2363,12 @@
       pointerEvents: "auto"
     });
 
-    // Shield · Star · Info · Pics · Message (native rail order)
-    side.appendChild(makeSidebarBtn("shield", NAV_ICONS.shield.glyph, "Safety"));
-    side.appendChild(makeSidebarBtn("favorites", NAV_ICONS.favorites.glyph, "Favorite"));
-    side.appendChild(makeSidebarBtn("details", NAV_ICONS.details.glyph, "Profile details"));
-    side.appendChild(makeSidebarBtn("pics", NAV_ICONS.pics.glyph, "Pics"));
-    side.appendChild(makeSidebarBtn("message", NAV_ICONS.message.glyph, "Message"));
+    // Block · Star · Info · Send pics · Send message
+    side.appendChild(makeSidebarBtn("shield", "block", "Block"));
+    side.appendChild(makeSidebarBtn("favorites", "star", "Favorite"));
+    side.appendChild(makeSidebarBtn("details", "info", "Profile details"));
+    side.appendChild(makeSidebarBtn("pics", "pics", "Send pics"));
+    side.appendChild(makeSidebarBtn("message", "send", "Send message"));
 
     side.addEventListener(
       "click",
@@ -2353,49 +2387,92 @@
     return side;
   }
 
+  function positionSidebar() {
+    var side = document.getElementById(SIDEBAR_ID);
+    if (!side || side.style.display === "none") return;
+
+    var profile = findProfileHost();
+    var bar = document.getElementById(BAR_ID);
+    var barTop = bar ? bar.getBoundingClientRect().top : window.innerHeight - 48;
+    var sideH = side.offsetHeight || 250;
+    var minTop = Math.max(72, Math.round(window.innerHeight * 0.12));
+
+    // Sit just above where profile details / stats start (bottom of rail near that band)
+    var anchor =
+      (profile &&
+        (qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
+          qs('[class*="profileName"], [class*="headline"], [class*="stats"]', profile))) ||
+      null;
+
+    var detailsTop = null;
+    if (anchor) {
+      detailsTop = anchor.getBoundingClientRect().top;
+    } else if (profile) {
+      var pr = profile.getBoundingClientRect();
+      detailsTop = pr.top + pr.height * 0.72;
+    } else {
+      detailsTop = barTop - 92;
+    }
+
+    // Bottom of sidebar ~8px above details start; clamp so it never covers the bar
+    var top = Math.round(detailsTop - sideH - 8);
+    var maxTop = Math.round(barTop - sideH - 10);
+    if (top > maxTop) top = maxTop;
+    if (top < minTop) top = minTop;
+
+    side.style.top = top + "px";
+    side.style.bottom = "auto";
+    side.style.transform = "none";
+  }
+
   function renderSidebar(state) {
     var side = ensureSidebar();
     var onProfile = state === "PROFILE";
     side.style.display = onProfile ? "flex" : "none";
     side.setAttribute("aria-hidden", onProfile ? "false" : "true");
-    // Hard-hide off profile so it never floats over map/chats
     if (!onProfile) {
       side.style.pointerEvents = "none";
-    } else {
-      side.style.pointerEvents = "auto";
+      return;
     }
+    side.style.pointerEvents = "auto";
+    // Measure after show
+    requestAnimationFrame(function () {
+      positionSidebar();
+    });
   }
 
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "6") return bar;
+    if (bar && bar.getAttribute("data-ready") === "7") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "6");
+    bar.setAttribute("data-ready", "7");
     Object.assign(bar.style, {
       position: "fixed",
-      bottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
-      left: "50%",
-      transform: "translateX(-50%)",
-      width: "min(360px, calc(100vw - 28px))",
+      bottom: "0",
+      left: "0",
+      right: "0",
+      width: "100%",
+      transform: "none",
       zIndex: "1000015",
       background: THEME.barBg,
-      border: "1px solid rgba(0,0,0,0.06)",
-      borderRadius: "22px",
+      border: "none",
+      borderTop: "1px solid rgba(0,0,0,0.08)",
+      borderRadius: "16px 16px 0 0",
       boxSizing: "border-box",
       display: "flex",
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-around",
-      gap: "2px",
-      padding: "6px 8px",
-      boxShadow: "0 10px 28px rgba(0,0,0,0.28)",
+      gap: "0",
+      padding: "4px 6px calc(4px + env(safe-area-inset-bottom, 0px))",
+      boxShadow: "0 -4px 18px rgba(0,0,0,0.16)",
       pointerEvents: "auto"
     });
 
-    // Floating white pill: Back · Favorites · Chats · Map · Settings
+    // Full-width short bar: Back · Star · Chat · Map · Settings
     bar.appendChild(makeFloatingNavBtn("back"));
     bar.appendChild(makeFloatingNavBtn("favorites"));
     bar.appendChild(makeFloatingNavBtn("chats"));
@@ -2422,8 +2499,7 @@
   function setBtnTone(btn, active, baseColor) {
     if (!btn) return;
     btn.style.color = active ? THEME.accentBg : baseColor || THEME.barText;
-    btn.style.fontWeight = active ? "700" : "500";
-    btn.style.opacity = active ? "1" : "0.88";
+    btn.style.opacity = active ? "1" : "0.86";
   }
 
   function renderBar(state) {
@@ -2433,7 +2509,6 @@
       bar.setAttribute("data-view", state || "MAP");
       document.documentElement.setAttribute("data-sniffies-view", state || "MAP");
 
-      // Profile actions live in the right sidebar only
       renderSidebar(state);
 
       var btns = {};
@@ -2443,13 +2518,16 @@
 
       setBtnTone(btns.map, state === "MAP", THEME.barText);
       setBtnTone(btns.chats, state === "CHATS_LIST" || state === "CHAT", THEME.barText);
-      setBtnTone(btns.favorites, state === "PROFILE", THEME.barText);
+      setBtnTone(btns.favorites, false, THEME.barText);
       setBtnTone(btns.back, false, THEME.barMute);
       setBtnTone(btns.settings, false, THEME.barMute);
 
       updateContentInset();
       renderComposer(state);
-      setTimeout(updateContentInset, 50);
+      setTimeout(function () {
+        updateContentInset();
+        if (state === "PROFILE") positionSidebar();
+      }, 50);
     } catch (e) {
       console.error("[Sniffies iPhone] render error:", e);
     }
@@ -2555,7 +2633,10 @@
 
     hookHistoryNavigation(schedule);
     window.addEventListener("hashchange", schedule);
-    window.addEventListener("resize", schedule);
+    window.addEventListener("resize", function () {
+      schedule();
+      if (resolveViewState() === "PROFILE") positionSidebar();
+    });
     window.addEventListener("pageshow", schedule);
     document.addEventListener("visibilitychange", function () {
       if (!document.hidden) schedule();
