@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.8
+// @version      1.2.1
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.8";
+  var VERSION = "1.2.1";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -94,25 +94,28 @@
   };
 
   var THEME = {
-    bg: "rgba(10, 14, 20, 0.94)",
-    bgSolid: "#0a0e14",
-    barBg: "#ffffff",
-    barText: "#1a1d22",
-    barMute: "#6b7280",
-    sidebarBg: "rgba(22, 24, 28, 0.78)",
-    sidebarBorder: "rgba(255,255,255,0.14)",
-    border: "rgba(255,255,255,0.08)",
-    borderHover: "rgba(255,255,255,0.16)",
+    bg: "rgba(12, 14, 18, 0.92)",
+    bgSolid: "#0c0e12",
+    dockBg: "rgba(14, 16, 20, 0.94)",
+    barBg: "rgba(14, 16, 20, 0.96)",
+    barText: "rgba(242, 244, 248, 0.92)",
+    barMute: "rgba(154, 163, 178, 0.78)",
+    barActive: "#6eb0ff",
+    sidebarBg: "rgba(18, 20, 26, 0.82)",
+    sidebarBorder: "rgba(255,255,255,0.12)",
+    border: "rgba(255,255,255,0.10)",
+    borderHover: "rgba(255,255,255,0.18)",
     text: "#f2f4f8",
     textDim: "#9aa3b2",
     textMute: "#6b7380",
-    accent: "#5b9dff",
+    accent: "#6eb0ff",
     accentBg: "#2f6fed",
     gold: "#f0a43a",
     green: "#3dd68c",
     danger: "#f07178",
-    chipBg: "rgba(255,255,255,0.05)",
-    chipBgHover: "rgba(255,255,255,0.10)",
+    chipBg: "rgba(255,255,255,0.07)",
+    chipBgHover: "rgba(255,255,255,0.13)",
+    inputBg: "rgba(255,255,255,0.06)",
     aiBg: "rgba(47, 111, 237, 0.14)",
     aiBorder: "rgba(91, 157, 255, 0.28)"
   };
@@ -548,11 +551,11 @@
       color: color,
       background: bg,
       border: opts.primary ? "1px solid transparent" : "1px solid " + THEME.border,
-      padding: opts.compact ? "8px 12px" : "10px 14px",
-      minHeight: "40px",
+      padding: opts.compact ? "5px 11px" : "10px 14px",
+      minHeight: opts.compact ? "30px" : "40px",
       borderRadius: "999px",
       cursor: "pointer",
-      fontSize: "13px",
+      fontSize: opts.compact ? "12px" : "13px",
       fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
       fontWeight: opts.bold ? "600" : "500",
       letterSpacing: "0.01em",
@@ -641,6 +644,60 @@
       scrollbarWidth: "none"
     });
     return row;
+  }
+
+  /** Dot / number marks for the short chat dock (full label stays in title). */
+  function markGlyphForIndex(idx) {
+    var n = (idx % 5) + 1;
+    // Sets of mid-dots — denser than words, still countable
+    return Array(n + 1).join("·");
+  }
+
+  function makeMarkChip(opts) {
+    opts = opts || {};
+    var b = document.createElement("button");
+    b.type = "button";
+    var label = opts.label || opts.title || "Quick";
+    b.setAttribute("aria-label", label);
+    b.title = opts.title || label;
+    if (opts.icon) {
+      b.appendChild(makeSvgIcon(opts.icon, 14));
+    } else {
+      b.textContent = opts.mark != null ? opts.mark : "·";
+    }
+    Object.assign(b.style, {
+      width: opts.wide ? "auto" : "28px",
+      minWidth: "28px",
+      height: "28px",
+      minHeight: "28px",
+      padding: opts.wide ? "0 8px" : "0",
+      margin: "0",
+      border: "1px solid " + (opts.border || THEME.border),
+      borderRadius: "999px",
+      background: opts.bg || THEME.chipBg,
+      color: opts.color || THEME.textDim,
+      display: "inline-flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "0",
+      fontSize: opts.icon ? "0" : "13px",
+      fontWeight: "600",
+      letterSpacing: opts.icon ? "0" : "0.06em",
+      lineHeight: "1",
+      cursor: "pointer",
+      flexShrink: "0",
+      webkitTapHighlightColor: "transparent",
+      userSelect: "none",
+      touchAction: "manipulation"
+    });
+    if (opts.action) {
+      b.addEventListener("click", function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        opts.action(e);
+      });
+    }
+    return b;
   }
 
   function spacer() {
@@ -805,43 +862,131 @@
       "html.sniffies-iphone-has-bar [class*='profile-detail']," +
       "html.sniffies-iphone-has-bar [class*='profileDetail']," +
       "html.sniffies-iphone-has-bar [class*='ProfileContainer'] {" +
-      "  padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 24px) !important;" +
-      "  scroll-padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 24px) !important;" +
+      "  padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 16px) !important;" +
+      "  scroll-padding-bottom: calc(var(--sniffies-iphone-inset-bottom, 72px) + 16px) !important;" +
       "  box-sizing: border-box !important;" +
       "}" +
       "html.sniffies-iphone-has-bar app-profile {" +
       "  max-height: none !important;" +
       "}" +
+      /* Chat thread must clear the composer+nav dock or latest msgs stay hidden */ +
+      "html[data-sniffies-view='CHAT'] app-private-chat," +
+      "html[data-sniffies-view='CHAT'] app-chat-thread," +
+      "html[data-sniffies-view='CHAT'] app-messenger," +
+      "html[data-sniffies-view='CHAT'] [data-testid='privateChat']," +
+      "html[data-sniffies-view='CHAT'] [data-testid='chatThread']," +
+      "html[data-sniffies-view='CHAT'] [data-testid='chatHistory']," +
+      "html[data-sniffies-view='CHAT'] [class*='private-chat']," +
+      "html[data-sniffies-view='CHAT'] [class*='privateChat']," +
+      "html[data-sniffies-view='CHAT'] [class*='chat-thread']," +
+      "html[data-sniffies-view='CHAT'] [class*='chatThread']," +
+      "html[data-sniffies-view='CHAT'] [class*='chat-history']," +
+      "html[data-sniffies-view='CHAT'] [class*='chatHistory']," +
+      "html[data-sniffies-view='CHAT'] [class*='message-list']," +
+      "html[data-sniffies-view='CHAT'] [class*='messageList']," +
+      "html[data-sniffies-view='CHAT'] [class*='messages-container']," +
+      "html[data-sniffies-view='CHAT'] [class*='messagesContainer']," +
+      "body.sniffies-iphone-composer-takeover [class*='chat-messages']," +
+      "body.sniffies-iphone-composer-takeover [class*='chatMessages'] {" +
+      "  padding-bottom: calc(var(--sniffies-iphone-dock-h, 140px) + 20px) !important;" +
+      "  scroll-padding-bottom: calc(var(--sniffies-iphone-dock-h, 140px) + 20px) !important;" +
+      "  box-sizing: border-box !important;" +
+      "}" +
       /* Keep the profile's native Message row above our icon bar */ +
       "html[data-sniffies-view='PROFILE'] [data-testid='chatInputPanel']," +
       "html[data-sniffies-view='PROFILE'] #chat-input-panel," +
       "html[data-sniffies-view='PROFILE'] app-chat-input {" +
-      "  margin-bottom: calc(var(--sniffies-iphone-bar-h, 56px) + 10px) !important;" +
+      "  margin-bottom: calc(var(--sniffies-iphone-bar-h, 52px) + 10px) !important;" +
       "  position: relative !important;" +
       "  z-index: 1000012 !important;" +
+      "}" +
+      /* Seamless dock: composer sits on the bar with no gap */ +
+      "#" +
+      COMPOSER_ID +
+      "[data-dock='1'] {" +
+      "  border-bottom: none !important;" +
+      "  box-shadow: none !important;" +
       "}";
     document.head.appendChild(style);
   }
 
-  function updateContentInset() {
-    ensureInsetStyle();
-    document.documentElement.classList.add("sniffies-iphone-has-bar");
+  function measureDockHeight() {
     var bar = document.getElementById(BAR_ID);
-    var h = bar ? Math.ceil(bar.getBoundingClientRect().height || 56) : 56;
+    var barH = bar ? Math.ceil(bar.getBoundingClientRect().height || 52) : 52;
     var composer = document.getElementById(COMPOSER_ID);
+    var compH = 0;
     if (
       composer &&
       composer.style.display !== "none" &&
       composer.getBoundingClientRect().height > 8
     ) {
-      h += Math.ceil(composer.getBoundingClientRect().height);
+      compH = Math.ceil(composer.getBoundingClientRect().height);
     }
-    h += 12;
-    document.documentElement.style.setProperty(
-      "--sniffies-iphone-inset-bottom",
-      h + "px"
+    return { barH: barH, compH: compH, dockH: barH + compH };
+  }
+
+  function findChatScrollRoots() {
+    var roots = [];
+    var seen = [];
+    function add(el) {
+      if (!el || seen.indexOf(el) !== -1 || isOurUi(el)) return;
+      seen.push(el);
+      roots.push(el);
+    }
+    add(findPrivateChatSurface());
+    var nodes = qsa(
+      "app-private-chat, app-chat-thread, app-messenger, [data-testid='chatHistory'], [class*='chat-history'], [class*='chatHistory'], [class*='message-list'], [class*='messageList'], [class*='messages-container']"
     );
-    document.documentElement.style.setProperty("--sniffies-iphone-bar-h", h + "px");
+    for (var i = 0; i < nodes.length; i++) {
+      if (isVisible(nodes[i]) || isOnScreen(nodes[i], 20)) add(nodes[i]);
+    }
+    // Deepest scrollable descendants that actually hold messages
+    for (var r = 0; r < roots.length; r++) {
+      var kids = qsa("[class*='scroll'], [class*='Scroll'], .cdk-virtual-scroll-viewport", roots[r]);
+      for (var k = 0; k < kids.length; k++) add(kids[k]);
+    }
+    return roots;
+  }
+
+  function scrollChatToLatest() {
+    var pad = measureDockHeight().dockH + 24;
+    var roots = findChatScrollRoots();
+    for (var i = 0; i < roots.length; i++) {
+      var el = roots[i];
+      try {
+        el.style.scrollPaddingBottom = pad + "px";
+        if (el.scrollHeight > el.clientHeight + 8) {
+          el.scrollTop = el.scrollHeight;
+        }
+      } catch (e) {}
+    }
+    // Also nudge any overflowing ancestor near the composer
+    var messages = qsa(
+      '[class*="chat-message"], [class*="message-body"], [data-testid="chatListMsgPreview"]'
+    );
+    if (messages.length) {
+      var last = messages[messages.length - 1];
+      if (last && !isOurUi(last)) {
+        try {
+          last.scrollIntoView({ block: "end", behavior: "smooth" });
+        } catch (e2) {}
+      }
+    }
+  }
+
+  function updateContentInset() {
+    ensureInsetStyle();
+    document.documentElement.classList.add("sniffies-iphone-has-bar");
+    var m = measureDockHeight();
+    var inset = m.dockH + 12;
+    document.documentElement.style.setProperty("--sniffies-iphone-bar-h", m.barH + "px");
+    document.documentElement.style.setProperty("--sniffies-iphone-dock-h", m.dockH + "px");
+    document.documentElement.style.setProperty("--sniffies-iphone-inset-bottom", inset + "px");
+    if (resolveViewState() === "CHAT" || isChatThreadOpen()) {
+      requestAnimationFrame(function () {
+        scrollChatToLatest();
+      });
+    }
   }
 
   function setComposerTakeover(on) {
@@ -1719,6 +1864,80 @@
     );
   }
 
+  /**
+   * Native profile "Message" control — including the wide text CTA at the bottom
+   * of the info sheet (rail scan skips width > 100, so sidebar used to miss it).
+   */
+  function findNativeMessageControl() {
+    var profile = findProfileHost() || qs(SEL.profile);
+    var roots = getProfileShellRoots(profile);
+    if (!roots.length && profile) roots = [profile];
+    var best = null;
+    var bestScore = 0;
+    var seen = [];
+
+    function consider(el) {
+      if (!el || seen.indexOf(el) !== -1 || isOurUi(el) || isMapMarkerNoise(el)) return;
+      seen.push(el);
+      if (!isVisible(el) && !isOnScreen(el, 6)) return;
+
+      var aria = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+      var title = (el.getAttribute("title") || "").trim().toLowerCase();
+      var tid = (el.getAttribute("data-testid") || "").toLowerCase();
+      var text = stripControls(el.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      var blob = (aria + " " + title + " " + tid + " " + text + " " + railLabelFor(el))
+        .toLowerCase()
+        .replace(/\s+/g, " ");
+      if (!isMessageish(blob)) return;
+      if (/missed|global|list|history|new messages|check for missed/.test(blob)) return;
+
+      var score = 0;
+      if (text === "message") score += 60;
+      else if (text.length && text.length < 28 && /\bmessage\b/.test(text)) score += 40;
+      if (aria === "message" || title === "message") score += 50;
+      else if (/\bmessage\b/.test(aria) || /\bmessage\b/.test(title)) score += 35;
+      if (/startchat|sendmessage|messagecruiser|messagebutton|message-button/.test(tid))
+        score += 45;
+      if (/fa-paper-plane|paper-plane|paperplane/.test(blob)) score += 28;
+      if (isOnScreen(el, 8)) score += 12;
+      if (profile && profile.contains && profile.contains(el)) score += 10;
+      var r = el.getBoundingClientRect();
+      // Prefer the wide text CTA the user can tap under the info section
+      if (r.width >= 72 && text === "message") score += 18;
+      if (r.width > 0 && r.width <= 56 && r.height <= 56 && !text) score += 6;
+
+      if (score > bestScore) {
+        bestScore = score;
+        best = el;
+      }
+    }
+
+    var selector =
+      'button, [role="button"], a, [tabindex], [data-testid*="essage"], [data-testid*="Message"], [class*="message-button"], [class*="messageButton"]';
+    for (var ri = 0; ri < roots.length; ri++) {
+      var nodes = qsa(selector, roots[ri]);
+      for (var i = 0; i < nodes.length; i++) consider(nodes[i]);
+    }
+
+    // Exact text / aria matches anywhere in the viewport (info sheet CTA)
+    var all = qsa('button, [role="button"], a');
+    for (var j = 0; j < all.length; j++) {
+      var el = all[j];
+      if (isOurUi(el)) continue;
+      var t = stripControls(el.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      var a = (el.getAttribute("aria-label") || "").trim().toLowerCase();
+      if (t === "message" || a === "message") consider(el);
+    }
+
+    return bestScore >= 30 ? best : null;
+  }
+
   function classifyProfileRail() {
     var rail = getProfileActionRail();
     var out = {
@@ -1773,7 +1992,8 @@
       else if (/favorit|bookmark|\bstar\b/.test(L) && !out.pin) out.pin = take(el);
     }
 
-    // Position fallbacks ONLY for a small clean rail (never map-marker soup)
+    // Position fallbacks ONLY for a small clean rail (never invent Message —
+    // wrong last-icon guess was swallowing the sidebar Message tap)
     var clean = rail.filter(function (item) {
       return (
         !isMapMarkerNoise(item.el) &&
@@ -1785,19 +2005,15 @@
     if (clean.length >= 2 && clean.length <= 8) {
       if (!out.report && clean[0]) out.report = take(clean[0].el);
       if (!out.pin && clean[1]) out.pin = take(clean[1].el);
-      if (!out.message) {
-        for (i = clean.length - 1; i >= 0; i--) {
-          if (used.indexOf(clean[i].el) === -1 && !isPhotoish(clean[i].label)) {
-            out.message = take(clean[i].el);
-            break;
-          }
-        }
-      }
       if (!out.photos && clean.length >= 2) {
         var maybe = clean[clean.length - 2].el;
-        if (used.indexOf(maybe) === -1) out.photos = take(maybe);
+        if (used.indexOf(maybe) === -1 && isPhotoish(clean[clean.length - 2].label)) {
+          out.photos = take(maybe);
+        }
       }
     }
+    // Prefer the wide native text Message CTA when rail icons were missed
+    if (!out.message) out.message = take(findNativeMessageControl());
     // Do NOT invent an info control by index — wrong index was opening the gallery
     return out;
   }
@@ -1908,27 +2124,34 @@
   }
 
   function cmdStartChat() {
-    // Already on the private-chat route — no Message rail icon; focus composer
-    if (isProfileChatPath() || isChatThreadOpen()) {
+    // Private-chat URL → focus composer (no Message CTA on that route)
+    if (isProfileChatPath()) {
       if (focusChatComposer("Type your message")) return;
     }
 
     var profile = findProfileHost();
-    if (!profile) {
-      showToast("Open a profile first", "error");
+    if (profile) {
+      // Prefer the native text "Message" under profile info (what works when tapped)
+      var nativeMsg = findNativeMessageControl();
+      if (clickNative(nativeMsg, "Message")) return;
+
+      var rail = classifyProfileRail();
+      if (rail.message && rail.message !== nativeMsg && clickNative(rail.message, "Message"))
+        return;
+      // Our sidebar covers the native plane — click through at the same spot
+      if (clickNativeUnderSidebar("message", "Message")) return;
+
+      // Compose-on-profile already open
+      if (focusChatComposer("Type your message")) return;
+
+      dumpProfileDebug().then(function () {
+        showToast("Message not found — dump copied", "error");
+      });
       return;
     }
-    var rail = classifyProfileRail();
-    if (clickNative(rail.message, "Message")) return;
-    // Our sidebar covers the native plane — click through at the same spot
-    if (clickNativeUnderSidebar("message", "Message")) return;
 
-    if (focusChatComposer("Type your message")) return;
-
-    // Capture HTML + rail so you can paste it back here
-    dumpProfileDebug().then(function () {
-      showToast("Message not found — dump copied", "error");
-    });
+    if (isChatThreadOpen() && focusChatComposer("Type your message")) return;
+    showToast("Open a profile first", "error");
   }
 
   function cmdShowProfileDetails() {
@@ -2668,22 +2891,23 @@
     if (el) return el;
     el = document.createElement("div");
     el.id = COMPOSER_ID;
+    el.setAttribute("data-dock", "1");
     Object.assign(el.style, {
       position: "fixed",
       left: "0",
       right: "0",
       bottom: "52px",
-      zIndex: "1000000",
+      zIndex: "1000014",
       display: "none",
       flexDirection: "column",
       gap: "6px",
-      padding: "8px 10px 8px",
+      padding: "8px 12px 6px",
       boxSizing: "border-box",
-      background: THEME.bg,
+      background: THEME.dockBg,
       borderTop: "1px solid " + THEME.border,
-      boxShadow: "0 -8px 28px rgba(0,0,0,0.35)",
-      backdropFilter: "blur(18px) saturate(1.2)",
-      webkitBackdropFilter: "blur(18px) saturate(1.2)"
+      borderRadius: "16px 16px 0 0",
+      backdropFilter: "blur(20px) saturate(1.25)",
+      webkitBackdropFilter: "blur(20px) saturate(1.25)"
     });
     document.body.appendChild(el);
     return el;
@@ -2695,82 +2919,64 @@
     setComposerTakeover(false);
   }
 
-  function buildAiStrip(onRefresh) {
-    var aiWrap = document.createElement("div");
-    Object.assign(aiWrap.style, {
-      display: "flex",
-      flexDirection: "column",
-      gap: "4px",
-      padding: "6px 8px",
-      borderRadius: "12px",
-      border: "1px solid " + THEME.aiBorder,
-      background: THEME.aiBg,
-      position: "relative",
-      overflow: "hidden"
-    });
-
-    var aiHead = document.createElement("div");
-    Object.assign(aiHead.style, {
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: "8px",
-      minHeight: "28px"
-    });
-    var aiLbl = document.createElement("div");
-    aiLbl.textContent = "Suggest";
-    Object.assign(aiLbl.style, {
-      color: THEME.accent,
-      fontSize: "11px",
-      fontWeight: "600",
-      letterSpacing: "0.04em",
-      textTransform: "uppercase"
-    });
-    aiHead.appendChild(aiLbl);
-    aiHead.appendChild(
-      makeIconBtn(
-        "↻",
-        function () {
-          refreshAiSuggestions(function () {
-            if (onRefresh) onRefresh();
-          });
-        },
-        THEME.accent
-      )
-    );
-    aiWrap.appendChild(aiHead);
-
-    var aiRow = makeChipRow();
+  /** Compact AI marks for the shared quick row (no tall card / word chips). */
+  function appendAiChips(row, onRefresh) {
     var suggestions = aiSuggestionsCache.length
       ? aiSuggestionsCache
       : localAiSuggestions(getRecentChatTexts());
+    if (!suggestions.length && !aiLoading) return false;
+
+    var divider = document.createElement("div");
+    Object.assign(divider.style, {
+      width: "1px",
+      alignSelf: "stretch",
+      minHeight: "16px",
+      margin: "0 2px",
+      background: "rgba(255,255,255,0.12)",
+      flexShrink: "0"
+    });
+    row.appendChild(divider);
+
     if (aiLoading && !suggestions.length) {
-      var loading = document.createElement("div");
-      loading.textContent = "…";
-      loading.style.color = THEME.textMute;
-      loading.style.fontSize = "12px";
-      aiRow.appendChild(loading);
-    } else if (!suggestions.length) {
-      var empty = document.createElement("div");
-      empty.textContent = "No suggestions yet";
-      empty.style.color = THEME.textMute;
-      empty.style.fontSize = "12px";
-      aiRow.appendChild(empty);
+      row.appendChild(
+        makeMarkChip({
+          mark: "…",
+          label: "Loading suggestions",
+          color: THEME.accent
+        })
+      );
     } else {
-      suggestions.forEach(function (s) {
-        aiRow.appendChild(
-          makeBtn(
-            s.label,
-            function () {
-              setComposerText(s.text);
-            },
-            { color: THEME.accent, compact: true }
-          )
+      suggestions.slice(0, 3).forEach(function (s, i) {
+        var text = s.text;
+        row.appendChild(
+          makeMarkChip({
+            mark: String(i + 1),
+            label: s.label || "Suggest",
+            title: (s.label || "Suggest") + " — " + (text || ""),
+            color: THEME.accent,
+            border: "1px solid " + THEME.aiBorder,
+            bg: THEME.aiBg,
+            action: function () {
+              setComposerText(text);
+            }
+          })
         );
       });
     }
-    aiWrap.appendChild(aiRow);
-    return aiWrap;
+
+    row.appendChild(
+      makeMarkChip({
+        mark: "↻",
+        label: "Refresh suggestions",
+        color: THEME.accent,
+        action: function () {
+          refreshAiSuggestions(function () {
+            if (onRefresh) onRefresh();
+          });
+        }
+      })
+    );
+    return true;
   }
 
   function renderComposer(state) {
@@ -2789,52 +2995,63 @@
     var stateData = loadState();
     var el = ensureComposerHost();
     el.innerHTML = "";
+    el.setAttribute("data-dock", "1");
     Object.assign(el.style, {
       position: "fixed",
       left: "0",
       right: "0",
-      zIndex: "1000000",
+      zIndex: "1000014",
       display: "flex",
       flexDirection: "column",
-      gap: "6px",
-      padding: "8px 10px 8px",
+      gap: "4px",
+      padding: "5px 10px 4px",
       boxSizing: "border-box",
-      background: THEME.bg,
+      background: THEME.dockBg,
       borderTop: "1px solid " + THEME.border,
-      boxShadow: "0 -8px 28px rgba(0,0,0,0.35)",
-      backdropFilter: "blur(18px) saturate(1.2)",
-      webkitBackdropFilter: "blur(18px) saturate(1.2)"
+      borderBottom: "none",
+      borderRadius: "14px 14px 0 0",
+      boxShadow: "none",
+      backdropFilter: "blur(20px) saturate(1.25)",
+      webkitBackdropFilter: "blur(20px) saturate(1.25)"
     });
-
-    if (stateData.aiEnabled) {
-      el.appendChild(
-        buildAiStrip(function () {
-          renderComposer("CHAT");
-        })
-      );
-    }
 
     var quickRow = makeChipRow();
-    loadQuickMessages().forEach(function (msg) {
+    quickRow.style.gap = "5px";
+    loadQuickMessages().forEach(function (msg, idx) {
       var text = msg.text;
+      var label = msg.label || "Quick " + (idx + 1);
       quickRow.appendChild(
-        makeBtn(
-          msg.label,
-          function () {
+        makeMarkChip({
+          mark: markGlyphForIndex(idx),
+          label: label,
+          title: label + " — " + (text || ""),
+          action: function () {
             setComposerText(text);
-          },
-          { compact: true }
-        )
+          }
+        })
       );
     });
-    quickRow.appendChild(makeBtn("Pics", cmdPics, { color: THEME.gold, compact: true }));
+    quickRow.appendChild(
+      makeMarkChip({
+        icon: "photos",
+        label: "Pics",
+        title: "Pics",
+        color: THEME.gold,
+        action: cmdPics
+      })
+    );
+    if (stateData.aiEnabled) {
+      appendAiChips(quickRow, function () {
+        renderComposer("CHAT");
+      });
+    }
     el.appendChild(quickRow);
 
     var inputRow = document.createElement("div");
     Object.assign(inputRow.style, {
       display: "flex",
       alignItems: "flex-end",
-      gap: "8px"
+      gap: "7px"
     });
 
     var ta = document.createElement("textarea");
@@ -2844,16 +3061,16 @@
     Object.assign(ta.style, {
       flex: "1",
       resize: "none",
-      minHeight: "40px",
-      maxHeight: "96px",
-      padding: "10px 12px",
-      borderRadius: "14px",
+      minHeight: "34px",
+      maxHeight: "72px",
+      padding: "7px 12px",
+      borderRadius: "17px",
       border: "1px solid " + THEME.border,
-      background: "rgba(255,255,255,0.04)",
+      background: THEME.inputBg,
       color: THEME.text,
       fontSize: "16px",
-      lineHeight: "1.35",
-      fontFamily: "-apple-system, system-ui, sans-serif",
+      lineHeight: "1.25",
+      fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
       outline: "none"
     });
     ta.addEventListener("focus", function () {
@@ -2864,7 +3081,14 @@
     });
     ta.addEventListener("input", function () {
       ta.style.height = "auto";
-      ta.style.height = Math.min(96, ta.scrollHeight) + "px";
+      ta.style.height = Math.min(72, ta.scrollHeight) + "px";
+      // Keep dock CSS vars in sync as the field grows — don't yank scroll while typing
+      var m = measureDockHeight();
+      document.documentElement.style.setProperty("--sniffies-iphone-dock-h", m.dockH + "px");
+      document.documentElement.style.setProperty(
+        "--sniffies-iphone-inset-bottom",
+        m.dockH + 12 + "px"
+      );
     });
     ta.addEventListener("keydown", function (e) {
       if (e.key === "Enter" && !e.shiftKey) {
@@ -2873,15 +3097,32 @@
       }
     });
 
-    var sendBtn = makeBtn("Send", cmdComposerSend, {
-      bg: THEME.accentBg,
+    var sendBtn = document.createElement("button");
+    sendBtn.type = "button";
+    sendBtn.setAttribute("aria-label", "Send");
+    sendBtn.appendChild(makeSvgIcon("send", 16));
+    Object.assign(sendBtn.style, {
+      width: "34px",
+      height: "34px",
+      minWidth: "34px",
+      minHeight: "34px",
+      padding: "0",
+      border: "none",
+      borderRadius: "50%",
+      background: THEME.accentBg,
       color: "#fff",
-      bold: true,
-      primary: true
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      cursor: "pointer",
+      flexShrink: "0",
+      webkitTapHighlightColor: "transparent"
     });
-    sendBtn.style.height = "40px";
-    sendBtn.style.minHeight = "40px";
-    sendBtn.style.padding = "0 16px";
+    sendBtn.addEventListener("click", function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      cmdComposerSend();
+    });
 
     inputRow.appendChild(ta);
     inputRow.appendChild(sendBtn);
@@ -2890,6 +3131,10 @@
     var bar = document.getElementById(BAR_ID);
     var barH = bar ? Math.ceil(bar.getBoundingClientRect().height) : 52;
     el.style.bottom = barH + "px";
+
+    updateContentInset();
+    setTimeout(scrollChatToLatest, 80);
+    setTimeout(scrollChatToLatest, 320);
 
     if (!aiSuggestionsCache.length && stateData.aiEnabled && !aiLoading) {
       refreshAiSuggestions(function () {
@@ -3367,12 +3612,12 @@
 
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "8") return bar;
+    if (bar && bar.getAttribute("data-ready") === "9") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "8");
+    bar.setAttribute("data-ready", "9");
     Object.assign(bar.style, {
       position: "fixed",
       bottom: "0",
@@ -3383,16 +3628,18 @@
       zIndex: "1000015",
       background: THEME.barBg,
       border: "none",
-      borderTop: "1px solid rgba(0,0,0,0.08)",
-      borderRadius: "16px 16px 0 0",
+      borderTop: "1px solid " + THEME.border,
+      borderRadius: "0",
       boxSizing: "border-box",
       display: "flex",
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-around",
       gap: "0",
-      padding: "4px 6px calc(4px + env(safe-area-inset-bottom, 0px))",
-      boxShadow: "0 -4px 18px rgba(0,0,0,0.16)",
+      padding: "6px 8px calc(6px + env(safe-area-inset-bottom, 0px))",
+      boxShadow: "0 -10px 32px rgba(0,0,0,0.45)",
+      backdropFilter: "blur(20px) saturate(1.25)",
+      webkitBackdropFilter: "blur(20px) saturate(1.25)",
       pointerEvents: "auto"
     });
 
@@ -3422,8 +3669,19 @@
 
   function setBtnTone(btn, active, baseColor) {
     if (!btn) return;
-    btn.style.color = active ? THEME.accentBg : baseColor || THEME.barText;
-    btn.style.opacity = active ? "1" : "0.86";
+    btn.style.color = active ? THEME.barActive : baseColor || THEME.barText;
+    btn.style.opacity = active ? "1" : "0.82";
+  }
+
+  function styleBarForState(bar, state) {
+    if (!bar) return;
+    var inChat = state === "CHAT";
+    bar.style.background = THEME.barBg;
+    bar.style.borderTop = inChat ? "none" : "1px solid " + THEME.border;
+    bar.style.borderRadius = inChat ? "0" : "16px 16px 0 0";
+    bar.style.boxShadow = inChat
+      ? "none"
+      : "0 -10px 32px rgba(0,0,0,0.45)";
   }
 
   function renderBar(state) {
@@ -3432,6 +3690,7 @@
       var bar = ensureBar();
       bar.setAttribute("data-view", state || "MAP");
       document.documentElement.setAttribute("data-sniffies-view", state || "MAP");
+      styleBarForState(bar, state);
 
       renderSidebar(state);
 
@@ -3450,8 +3709,12 @@
       renderComposer(state);
       setTimeout(function () {
         updateContentInset();
+        if (state === "CHAT") scrollChatToLatest();
         if (state === "PROFILE") positionSidebar();
       }, 50);
+      setTimeout(function () {
+        if (state === "CHAT") scrollChatToLatest();
+      }, 400);
     } catch (e) {
       console.error("[Sniffies iPhone] render error:", e);
     }
@@ -3595,6 +3858,7 @@
         findChatListHost: findChatListHost,
         cmdShowProfileDetails: cmdShowProfileDetails,
         cmdStartChat: cmdStartChat,
+        findNativeMessageControl: findNativeMessageControl,
         classifyProfileRail: classifyProfileRail,
         dumpProfileRail: dumpProfileRail,
         dumpProfileDebug: dumpProfileDebug,
