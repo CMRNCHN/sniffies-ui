@@ -15,6 +15,24 @@
     .fail { color: #da3633; }
     app-profile, app-chat-list, #chat-input-panel { display: block; margin: 12px 0; padding: 16px; border: 1px solid #30363d; border-radius: 10px; background: #161b22; }
     textarea { width: 100%; min-height: 48px; background: #0d1117; color: #e6edf3; border: 1px solid #30363d; border-radius: 8px; padding: 8px; font-size: 16px; }
+    .profile-rail {
+      position: absolute;
+      right: 8px;
+      top: 80px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      z-index: 2;
+    }
+    .profile-rail button {
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      border: 1px solid #30363d;
+      background: #21262d;
+      color: #e6edf3;
+      cursor: pointer;
+    }
   </style>
 </head>
 <body>
@@ -64,14 +82,20 @@
     function sceneProfile() {
       clearFixture();
       fixture.innerHTML = `
-        <app-profile style="display:block;width:360px;height:480px">
+        <app-profile style="display:block;position:relative;width:360px;height:480px">
+          <img alt="profile" src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==" style="width:100%;height:280px;object-fit:cover;background:#333" />
           <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
           <div class="stats">21, 145lb</div>
           <p class="about">Into pups and hosting downtown.</p>
           <span class="tag">Vers</span>
           <span class="tag">Host</span>
-          <button aria-label="Message">Message</button>
-          <button aria-label="Favorite">Favorite</button>
+          <div class="profile-rail">
+            <button aria-label="Report Cruiser" title="Report">S</button>
+            <button aria-label="Pin for Later" title="Favorite">*</button>
+            <button aria-label="Profile info" title="Info">i</button>
+            <button aria-label="Photos" title="Photos">P</button>
+            <button aria-label="Message" title="Message">M</button>
+          </div>
           <button aria-label="Back">Back</button>
         </app-profile>`;
     }
@@ -79,9 +103,15 @@
     function sceneProfileCompose() {
       clearFixture();
       fixture.innerHTML = `
-        <app-profile style="display:block;width:360px;height:520px">
+        <app-profile style="display:block;position:relative;width:360px;height:520px">
           <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
-          <button aria-label="Favorite">Favorite</button>
+          <div class="profile-rail">
+            <button aria-label="Report Cruiser">S</button>
+            <button aria-label="Pin for Later">*</button>
+            <button aria-label="Profile info">i</button>
+            <button aria-label="Photos">P</button>
+            <button aria-label="Message">M</button>
+          </div>
           <button aria-label="Back">Back</button>
           <div id="chat-input-panel" data-testid="chatInputPanel" class="chat-input-panel" style="display:block;width:340px;height:100px">
             <textarea name="chatTextArea" data-testid="chatTextArea" placeholder="Message..."></textarea>
@@ -148,71 +178,63 @@
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "MAP", "MAP detected"));
       log(assert(document.getElementById("sniffies-iphone-bar")?.dataset.view === "MAP", "bar shows MAP"));
-      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="chats"]'), "MAP has Chats icon"));
-      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="pinned"]'), "MAP has Pinned icon"));
-      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="favorites"]'), "MAP has Favorites icon"));
-      log(assert(!document.querySelector('#sniffies-iphone-bar [data-cmd="saved"]'), "no Places/Saved cmd"));
-      log(assert(![...document.querySelectorAll("#sniffies-iphone-bar button")].find(b => b.textContent.match(/^Split/)), "no Split nav button"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="chats"]'), "floating bar has Chats"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="map"]'), "floating bar has Map"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="favorites"]'), "floating bar has Favorites"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="back"]'), "floating bar has Back"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="settings"]'), "floating bar has Settings"));
+      log(assert(!document.querySelector('#sniffies-iphone-bar [data-cmd="message"]'), "no Message on bottom bar"));
+      log(assert(!document.querySelector('#sniffies-iphone-bar [data-profile-row]'), "no old profile CTA row"));
+      const sideMap = document.getElementById("sniffies-iphone-sidebar");
+      log(assert(!sideMap || sideMap.style.display === "none", "sidebar hidden on MAP"));
 
       sceneChats();
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "CHATS_LIST", "CHATS_LIST via visible rows/tabs"));
-      log(assert(document.getElementById("sniffies-iphone-bar")?.dataset.view === "CHATS_LIST", "bar shows CHATS_LIST"));
+      log(assert(document.getElementById("sniffies-iphone-sidebar")?.style.display === "none", "sidebar hidden on CHATS_LIST"));
 
       sceneProfile();
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "PROFILE", "PROFILE detected"));
-      const msgBtn = document.querySelector('#sniffies-iphone-bar [data-cmd="message"]');
-      const msgCta = document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="message"]');
-      log(assert(!!msgBtn, "PROFILE has Message control"));
-      log(assert(!!msgCta && msgCta.closest("[data-profile-row]").style.display !== "none", "PROFILE shows Message CTA row"));
-      const detailsCta = document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="details"]');
-      log(assert(!!detailsCta, "PROFILE shows Details CTA"));
-      log(assert(/Profile details/i.test(detailsCta.textContent || ""), "Details CTA labeled Profile details"));
+      const side = document.getElementById("sniffies-iphone-sidebar");
+      log(assert(!!side && side.style.display === "flex", "sidebar visible on PROFILE only"));
+      log(assert(!!side.querySelector('[data-cmd="details"]'), "sidebar has Details"));
+      log(assert(!!side.querySelector('[data-cmd="message"]'), "sidebar has Message"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
 
-      // Details opens sheet with scraped profile text
-      detailsCta.click();
+      // Details clicks native info rail button (swipe-up trigger), not our sheet first
+      let nativeInfo = false;
+      const infoBtn = document.querySelector('app-profile button[aria-label="Profile info"]');
+      if (infoBtn) infoBtn.addEventListener("click", () => { nativeInfo = true; }, { once: true });
+      side.querySelector('[data-cmd="details"]').click();
       await wait(80);
-      const detailsSheet = document.getElementById("sniffies-iphone-profile-details");
-      log(assert(!!detailsSheet, "Details CTA opens profile details sheet"));
-      log(assert(/Registered Cruiser|Cruiser|21|145/i.test(detailsSheet?.textContent || ""), "details sheet includes profile text"));
-      detailsSheet?.remove();
+      log(assert(nativeInfo, "Details sidebar btn clicks native Profile info"));
+      document.getElementById("sniffies-iphone-profile-details")?.remove();
+
+      // Message clicks native Message rail button
+      let nativeMsg = false;
+      const nMsg = document.querySelector('app-profile button[aria-label="Message"]');
+      if (nMsg) nMsg.addEventListener("click", () => { nativeMsg = true; }, { once: true });
+      side.querySelector('[data-cmd="message"]').click();
+      await wait(80);
+      log(assert(nativeMsg, "Message sidebar btn clicks native Message"));
 
       sceneProfileCompose();
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "PROFILE", "profile+composer is PROFILE not CHAT"));
-      log(assert(document.documentElement.getAttribute("data-sniffies-view") === "PROFILE", "html view attr PROFILE"));
-      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="message"]'), "profile+composer shows Message CTA"));
-      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="send"]') &&
-        document.querySelector('#sniffies-iphone-bar [data-cmd="send"]').style.display !== "none", "profile+composer shows Send"));
+      log(assert(document.getElementById("sniffies-iphone-sidebar")?.style.display === "flex", "sidebar still on profile+composer"));
       log(assert(!document.getElementById("sniffies-iphone-composer") ||
         document.getElementById("sniffies-iphone-composer").style.display === "none", "no composer takeover on profile"));
-
-      // Message CTA clicks native Message (not Chats list)
-      let nativeMsg = false;
-      const native = document.querySelector('app-profile button[aria-label="Message"]');
-      // profile compose scene may not have Message button — use sceneProfile for click test
-      sceneProfile();
-      await wait(80);
-      api.renderBar("PROFILE");
-      await wait(40);
-      const nMsg = document.querySelector('app-profile button[aria-label="Message"]');
-      if (nMsg) nMsg.addEventListener("click", () => { nativeMsg = true; }, { once: true });
-      document.querySelector('#sniffies-iphone-bar [data-profile-row] [data-cmd="message"]').click();
-      await wait(80);
-      log(assert(nativeMsg, "Message CTA triggers native Message, not Chats"));
 
       sceneChat();
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "CHAT", "CHAT via chatInputPanel"));
+      log(assert(document.getElementById("sniffies-iphone-sidebar")?.style.display === "none", "sidebar hidden on CHAT"));
       log(assert(!!document.getElementById("sniffies-iphone-composer"), "quick composer mounts"));
-      const sendNav = document.querySelector('#sniffies-iphone-bar [data-cmd="send"]');
-      log(assert(!!sendNav && sendNav.style.display !== "none", "CHAT shows Send icon in nav"));
       log(assert(!!api.getChatTextArea(), "chat textarea found"));
       log(assert(!!api.getSendButton(), "send button found"));
 
@@ -235,7 +257,9 @@
       clearFixture();
       fixture.innerHTML = '<div data-testid="chat-global-messages-panel" style="display:block;width:200px;height:200px">global</div>';
       await wait(50);
+      api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "MAP", "global chat panel alone is not private CHAT"));
+      log(assert(document.getElementById("sniffies-iphone-sidebar")?.style.display === "none", "sidebar hidden after leaving profile"));
 
       const failed = lines.filter((l) => l.startsWith("FAIL")).length;
       results.className = failed ? "fail" : "pass";

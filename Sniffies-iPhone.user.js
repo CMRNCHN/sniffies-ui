@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.0.8
-// @description  Mobile nav + quick message bar for Tampermonkey on iOS (no Split View)
+// @version      1.1.0
+// @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
 // @match        https://www.sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.0.8";
+  var VERSION = "1.1.0";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -34,22 +34,27 @@
   var INSET_STYLE_ID = "sniffies-iphone-inset";
 
   var BAR_ID = "sniffies-iphone-bar";
+  var SIDEBAR_ID = "sniffies-iphone-sidebar";
   var COMPOSER_ID = "sniffies-iphone-composer";
   var SETTINGS_ID = "sniffies-iphone-settings";
   var DETAILS_ID = "sniffies-iphone-profile-details";
   var TOAST_ID = "sniffies-iphone-toast";
   var HIDE_STYLE_ID = "sniffies-iphone-hide-native";
 
+  // Floating white bottom bar (outline-style labels)
   var NAV_ICONS = {
-    map: { glyph: "\uD83D\uDDFA", label: "Map" },
-    chats: { glyph: "\uD83D\uDCAC", label: "Chats" },
-    pinned: { glyph: "\uD83D\uDCCC", label: "Pinned" },
-    favorites: { glyph: "\u2665", label: "Favorites" },
-    message: { glyph: "\u2709", label: "Message" },
-    details: { glyph: "\u2139", label: "Details" },
-    send: { glyph: "\u27A4", label: "Send" },
     back: { glyph: "\u2190", label: "Back" },
-    settings: { glyph: "\u2699", label: "Settings" }
+    favorites: { glyph: "\u2606", label: "Favorites" },
+    chats: { glyph: "\uD83D\uDCAC", label: "Chats" },
+    map: { glyph: "\uD83D\uDCCD", label: "Map" },
+    settings: { glyph: "\u2699", label: "Settings" },
+    // kept for chat composer / legacy cmds
+    pinned: { glyph: "\uD83D\uDCCC", label: "Pinned" },
+    message: { glyph: "\u2708", label: "Message" },
+    details: { glyph: "\u24D8", label: "Details" },
+    send: { glyph: "\u27A4", label: "Send" },
+    pics: { glyph: "\uD83D\uDCF7", label: "Pics" },
+    shield: { glyph: "\uD83D\uDEE1", label: "Safety" }
   };
 
   var DEFAULTS = {
@@ -67,6 +72,11 @@
   var THEME = {
     bg: "rgba(10, 14, 20, 0.94)",
     bgSolid: "#0a0e14",
+    barBg: "#ffffff",
+    barText: "#1a1d22",
+    barMute: "#6b7280",
+    sidebarBg: "rgba(22, 24, 28, 0.78)",
+    sidebarBorder: "rgba(255,255,255,0.14)",
     border: "rgba(255,255,255,0.08)",
     borderHover: "rgba(255,255,255,0.16)",
     text: "#f2f4f8",
@@ -241,7 +251,7 @@
   }
 
   function ourUiIds() {
-    return [BAR_ID, COMPOSER_ID, SETTINGS_ID, DETAILS_ID, TOAST_ID];
+    return [BAR_ID, SIDEBAR_ID, COMPOSER_ID, SETTINGS_ID, DETAILS_ID, TOAST_ID];
   }
 
   function isOurUi(el) {
@@ -254,7 +264,16 @@
     if (
       el.closest &&
       el.closest(
-        "#" + BAR_ID + ", #" + COMPOSER_ID + ", #" + SETTINGS_ID + ", #" + DETAILS_ID
+        "#" +
+          BAR_ID +
+          ", #" +
+          SIDEBAR_ID +
+          ", #" +
+          COMPOSER_ID +
+          ", #" +
+          SETTINGS_ID +
+          ", #" +
+          DETAILS_ID
       )
     ) {
       return true;
@@ -664,6 +683,12 @@
       "," +
       "#" +
       BAR_ID +
+      " button," +
+      "#" +
+      SIDEBAR_ID +
+      "," +
+      "#" +
+      SIDEBAR_ID +
       " button," +
       "#" +
       COMPOSER_ID +
@@ -1186,13 +1211,156 @@
     }
   }
 
+  // Native profile right-rail (shield / star / info / pics / plane)
+  function getProfileActionRail() {
+    var profile = findProfileHost() || qs(SEL.profile);
+    if (!profile) return [];
+    var pr = profile.getBoundingClientRect();
+    if (pr.width < 40 || pr.height < 40) return [];
+    var items = [];
+    var nodes = qsa('button, [role="button"], a', profile);
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (isOurUi(el)) continue;
+      var r = el.getBoundingClientRect();
+      if (r.width < 2 || r.height < 2) continue;
+      if (r.width > 84 || r.height > 84) continue;
+      // Right strip of the profile / viewport
+      var onRightHalf = r.left > Math.min(pr.left + pr.width * 0.62, window.innerWidth * 0.58);
+      var nearRightEdge = r.right > pr.right - 72 || r.right > window.innerWidth - 88;
+      if (!onRightHalf && !nearRightEdge) continue;
+      items.push({
+        el: el,
+        top: r.top,
+        label: (
+          (el.getAttribute("aria-label") || "") +
+          " " +
+          (el.getAttribute("title") || "") +
+          " " +
+          (el.getAttribute("data-testid") || "") +
+          " " +
+          (el.textContent || "")
+        )
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim()
+      });
+    }
+    items.sort(function (a, b) {
+      return a.top - b.top;
+    });
+    return items;
+  }
+
+  function pickProfileRailButton(hints, indexFallback) {
+    var rail = getProfileActionRail();
+    var h, i;
+    for (i = 0; i < rail.length; i++) {
+      for (h = 0; h < hints.length; h++) {
+        if (rail[i].label.indexOf(hints[h]) !== -1) return rail[i].el;
+      }
+    }
+    if (indexFallback != null && rail[indexFallback]) return rail[indexFallback].el;
+    return null;
+  }
+
+  function findNativeProfileInfoButton() {
+    return pickProfileRailButton(
+      ["info", "detail", "about", "more info", "profile info", "information"],
+      2
+    );
+  }
+
+  function findNativeProfileMessageButton() {
+    return (
+      pickProfileRailButton(["message", "send message", "paper plane", "airplane", "dm"], 4) ||
+      pickProfileRailButton(["send", "plane", "chat"], 4)
+    );
+  }
+
+  function findNativeProfileFavoriteButton() {
+    return pickProfileRailButton(
+      ["favorit", "star", "bookmark", "save", "pin for later", "pin later", "pinned for later", "pin"],
+      1
+    );
+  }
+
+  function findNativeProfilePicsButton() {
+    return (
+      pickProfileRailButton(["photo", "pic", "media", "album", "image", "gallery", "camera"], 3) ||
+      qs(SEL.addMedia)
+    );
+  }
+
+  function findNativeProfileShieldButton() {
+    return pickProfileRailButton(["shield", "report", "block", "safety", "secure"], 0);
+  }
+
+  function clickNative(el, toast) {
+    if (!el) return false;
+    try {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    } catch (e) {}
+    try {
+      el.click();
+    } catch (e2) {
+      return false;
+    }
+    if (toast) showToast(toast, "success");
+    return true;
+  }
+
+  function dispatchSwipeUp(el) {
+    if (!el) return false;
+    var r = el.getBoundingClientRect();
+    if (r.width < 8 || r.height < 8) return false;
+    var x = Math.min(window.innerWidth - 24, Math.max(24, r.left + r.width * 0.42));
+    var y0 = r.top + r.height * 0.78;
+    var y1 = r.top + r.height * 0.28;
+
+    function firePointer(type, y) {
+      try {
+        el.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerId: 1,
+            pointerType: "touch",
+            isPrimary: true,
+            clientX: x,
+            clientY: y,
+            buttons: type === "pointerup" ? 0 : 1
+          })
+        );
+      } catch (e) {}
+      try {
+        el.dispatchEvent(
+          new MouseEvent(
+            type === "pointerdown" ? "mousedown" : type === "pointerup" ? "mouseup" : "mousemove",
+            { bubbles: true, cancelable: true, clientX: x, clientY: y, buttons: type === "pointerup" ? 0 : 1 }
+          )
+        );
+      } catch (e2) {}
+    }
+
+    firePointer("pointerdown", y0);
+    firePointer("pointermove", (y0 + y1) / 2);
+    firePointer("pointermove", y1);
+    firePointer("pointerup", y1);
+    try {
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, clientX: x, clientY: y1 }));
+    } catch (e3) {}
+    return true;
+  }
+
   function getProfileChatButton() {
+    var plane = findNativeProfileMessageButton();
+    if (plane) return plane;
     var profile = findProfileHost() || qs(SEL.profile);
     var roots = [profile, document.body].filter(Boolean);
-    var i;
     for (var r = 0; r < roots.length; r++) {
       var candidates = qsa('button, [role="button"], a', roots[r]);
-      for (i = 0; i < candidates.length; i++) {
+      for (var i = 0; i < candidates.length; i++) {
         var el = candidates[i];
         if (isOurUi(el) || !isVisible(el)) continue;
         var label = (
@@ -1204,29 +1372,9 @@
         )
           .toLowerCase()
           .trim();
-        if (
-          label.indexOf("message") !== -1 ||
-          label.indexOf("send message") !== -1 ||
-          /(^|\s)chat(\s|$)/.test(label)
-        ) {
-          // Prefer profile-local buttons over chat-list / global chat
+        if (label.indexOf("message") !== -1 || label.indexOf("send message") !== -1) {
           if (profile && profile.contains(el)) return el;
           if (!profile) return el;
-        }
-      }
-      // Second pass: profile-only matches
-      if (profile) {
-        for (i = 0; i < candidates.length; i++) {
-          var el2 = candidates[i];
-          if (isOurUi(el2) || !isVisible(el2) || !profile.contains(el2)) continue;
-          var blob = (
-            (el2.getAttribute("aria-label") || "") +
-            " " +
-            (el2.getAttribute("data-testid") || "") +
-            " " +
-            (el2.textContent || "")
-          ).toLowerCase();
-          if (blob.indexOf("message") !== -1 || blob.indexOf("chat") !== -1) return el2;
         }
       }
     }
@@ -1234,36 +1382,66 @@
   }
 
   function cmdStartChat() {
-    // Dedicated "Message this profile" action — never opens the Chats list.
+    var profile = findProfileHost();
+    if (!profile) {
+      showToast("Open a profile first", "error");
+      return;
+    }
+    if (clickNative(findNativeProfileMessageButton() || getProfileChatButton(), "Message")) return;
+    var native = getNativeChatTextArea();
+    if (native) {
+      try {
+        native.scrollIntoView({ block: "center", behavior: "smooth" });
+      } catch (e) {}
+      native.focus();
+      showToast("Type your message", "success");
+      return;
+    }
+    showToast("Message control not found", "error");
+  }
+
+  function cmdShowProfileDetails() {
     var profile = findProfileHost();
     if (!profile) {
       showToast("Open a profile first", "error");
       return;
     }
 
-    // 1) Prefer native Message / Chat control on the profile
-    var btn = getProfileChatButton();
-    if (btn) {
-      try {
-        btn.scrollIntoView({ block: "center", behavior: "smooth" });
-      } catch (e) {}
-      btn.click();
-      showToast("Message", "success");
+    // 1) Native (i) on the right rail — opens the in-profile swipe-up sheet
+    if (clickNative(findNativeProfileInfoButton(), "Details")) return;
+
+    // 2) Swipe up on the profile photo / media (native gesture)
+    var media =
+      qs("img", profile) ||
+      qs('[class*="photo"], [class*="media"], [class*="carousel"], [class*="gallery"]', profile);
+    if (media && dispatchSwipeUp(media)) {
+      showToast("Details", "success");
       return;
     }
 
-    // 2) Profile already has an inline Message box — focus it
-    var native = getNativeChatTextArea();
-    if (native) {
-      try {
-        native.scrollIntoView({ block: "center", behavior: "smooth" });
-      } catch (e2) {}
-      native.focus();
-      showToast("Type your message", "success");
-      return;
-    }
+    // 3) Tap name/stats overlay (sometimes expands details)
+    var overlay =
+      qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
+      qs('[class*="profileName"], [class*="cruiser-name"], [class*="headline"]', profile);
+    if (overlay && !isOurUi(overlay) && clickNative(overlay, "Details")) return;
 
-    showToast("Message control not found", "error");
+    // 4) Last resort: our readable sheet
+    renderProfileDetailsModal();
+  }
+
+  function cmdProfilePics() {
+    if (clickNative(findNativeProfilePicsButton(), "Pics")) return;
+    cmdPics();
+  }
+
+  function cmdProfileFavorite() {
+    if (clickNative(findNativeProfileFavoriteButton(), "Favorited")) return;
+    cmdFavoriteProfile();
+  }
+
+  function cmdProfileShield() {
+    if (clickNative(findNativeProfileShieldButton(), "Safety")) return;
+    showToast("Safety control not found", "error");
   }
 
   function scrapeProfileDetails() {
@@ -1469,44 +1647,6 @@
 
     overlay.appendChild(sheet);
     document.body.appendChild(overlay);
-  }
-
-  function cmdShowProfileDetails() {
-    var profile = findProfileHost();
-    if (!profile) {
-      showToast("Open a profile first", "error");
-      return;
-    }
-    // Prefer native details / expand / info if present
-    var natives = qsa('button, [role="button"], a', profile);
-    for (var i = 0; i < natives.length; i++) {
-      var el = natives[i];
-      if (isOurUi(el) || !isVisible(el)) continue;
-      var label = (
-        (el.getAttribute("aria-label") || "") +
-        " " +
-        (el.getAttribute("data-testid") || "") +
-        " " +
-        (el.textContent || "")
-      ).toLowerCase();
-      if (
-        label.indexOf("detail") !== -1 ||
-        label.indexOf("about") !== -1 ||
-        label.indexOf("more info") !== -1 ||
-        label.indexOf("profile info") !== -1 ||
-        label.indexOf("expand") !== -1
-      ) {
-        try {
-          el.scrollIntoView({ block: "center", behavior: "smooth" });
-        } catch (e) {}
-        el.click();
-        showToast("Details", "success");
-        // Still open our sheet so content isn't stuck under the bar
-        setTimeout(renderProfileDetailsModal, 120);
-        return;
-      }
-    }
-    renderProfileDetailsModal();
   }
 
   function getFavoriteButton() {
@@ -2068,7 +2208,7 @@
   }
 
   // ============================================================
-  // BOTTOM NAV BAR
+  // PROFILE SIDEBAR + FLOATING BOTTOM BAR
   // ============================================================
 
   function onBarAction(cmd) {
@@ -2077,10 +2217,12 @@
       else if (cmd === "chats") cmdOpenChats();
       else if (cmd === "pinned") cmdPinned();
       else if (cmd === "favorites" || cmd === "saved") {
-        if (resolveViewState() === "PROFILE") cmdFavoriteProfile();
+        if (resolveViewState() === "PROFILE") cmdProfileFavorite();
         else cmdFavorites();
       } else if (cmd === "message" || cmd === "chat") cmdStartChat();
       else if (cmd === "details") cmdShowProfileDetails();
+      else if (cmd === "pics") cmdProfilePics();
+      else if (cmd === "shield") cmdProfileShield();
       else if (cmd === "send") cmdComposerSend();
       else if (cmd === "back") cmdBack();
       else if (cmd === "settings") renderSettingsModal();
@@ -2090,98 +2232,176 @@
     }
   }
 
+  function makeFloatingNavBtn(cmd) {
+    var meta = NAV_ICONS[cmd] || { glyph: "?", label: cmd };
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = meta.glyph;
+    b.setAttribute("data-cmd", cmd);
+    b.setAttribute("aria-label", meta.label);
+    b.title = meta.label;
+    Object.assign(b.style, {
+      width: "48px",
+      height: "48px",
+      minWidth: "48px",
+      minHeight: "48px",
+      padding: "0",
+      margin: "0",
+      border: "none",
+      background: "transparent",
+      color: THEME.barText,
+      fontSize: cmd === "chats" ? "22px" : "20px",
+      lineHeight: "1",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: "14px",
+      flex: "1 1 0",
+      maxWidth: "56px",
+      webkitTapHighlightColor: "transparent",
+      userSelect: "none",
+      touchAction: "manipulation",
+      opacity: "0.92"
+    });
+    return b;
+  }
+
+  function makeSidebarBtn(cmd, glyph, label) {
+    var b = document.createElement("button");
+    b.type = "button";
+    b.textContent = glyph;
+    b.setAttribute("data-cmd", cmd);
+    b.setAttribute("aria-label", label);
+    b.title = label;
+    Object.assign(b.style, {
+      width: "44px",
+      height: "44px",
+      minWidth: "44px",
+      minHeight: "44px",
+      padding: "0",
+      margin: "0",
+      border: "none",
+      background: "transparent",
+      color: "rgba(255,255,255,0.92)",
+      fontSize: "20px",
+      lineHeight: "1",
+      cursor: "pointer",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      borderRadius: "12px",
+      webkitTapHighlightColor: "transparent",
+      userSelect: "none",
+      touchAction: "manipulation"
+    });
+    return b;
+  }
+
+  function ensureSidebar() {
+    var side = document.getElementById(SIDEBAR_ID);
+    if (side && side.getAttribute("data-ready") === "1") return side;
+
+    if (side) side.remove();
+    side = document.createElement("div");
+    side.id = SIDEBAR_ID;
+    side.setAttribute("data-ready", "1");
+    Object.assign(side.style, {
+      position: "fixed",
+      top: "50%",
+      right: "10px",
+      transform: "translateY(-54%)",
+      zIndex: "1000016",
+      display: "none",
+      flexDirection: "column",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "10px",
+      padding: "12px 8px",
+      boxSizing: "border-box",
+      width: "56px",
+      borderRadius: "22px",
+      background: THEME.sidebarBg,
+      border: "1px solid " + THEME.sidebarBorder,
+      boxShadow: "0 10px 28px rgba(0,0,0,0.38)",
+      backdropFilter: "blur(16px) saturate(1.15)",
+      webkitBackdropFilter: "blur(16px) saturate(1.15)",
+      pointerEvents: "auto"
+    });
+
+    // Shield · Star · Info · Pics · Message (native rail order)
+    side.appendChild(makeSidebarBtn("shield", NAV_ICONS.shield.glyph, "Safety"));
+    side.appendChild(makeSidebarBtn("favorites", NAV_ICONS.favorites.glyph, "Favorite"));
+    side.appendChild(makeSidebarBtn("details", NAV_ICONS.details.glyph, "Profile details"));
+    side.appendChild(makeSidebarBtn("pics", NAV_ICONS.pics.glyph, "Pics"));
+    side.appendChild(makeSidebarBtn("message", NAV_ICONS.message.glyph, "Message"));
+
+    side.addEventListener(
+      "click",
+      function (e) {
+        var t = e.target;
+        while (t && t !== side && !(t.getAttribute && t.getAttribute("data-cmd"))) t = t.parentNode;
+        if (!t || t === side) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onBarAction(t.getAttribute("data-cmd"));
+      },
+      true
+    );
+
+    document.body.appendChild(side);
+    return side;
+  }
+
+  function renderSidebar(state) {
+    var side = ensureSidebar();
+    var onProfile = state === "PROFILE";
+    side.style.display = onProfile ? "flex" : "none";
+    side.setAttribute("aria-hidden", onProfile ? "false" : "true");
+    // Hard-hide off profile so it never floats over map/chats
+    if (!onProfile) {
+      side.style.pointerEvents = "none";
+    } else {
+      side.style.pointerEvents = "auto";
+    }
+  }
+
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "5") return bar;
+    if (bar && bar.getAttribute("data-ready") === "6") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "5");
+    bar.setAttribute("data-ready", "6");
     Object.assign(bar.style, {
       position: "fixed",
-      bottom: "0",
-      left: "0",
-      right: "0",
-      width: "100%",
+      bottom: "calc(10px + env(safe-area-inset-bottom, 0px))",
+      left: "50%",
+      transform: "translateX(-50%)",
+      width: "min(360px, calc(100vw - 28px))",
       zIndex: "1000015",
-      background: THEME.bg,
-      borderTop: "1px solid " + THEME.border,
+      background: THEME.barBg,
+      border: "1px solid rgba(0,0,0,0.06)",
+      borderRadius: "22px",
       boxSizing: "border-box",
       display: "flex",
-      flexDirection: "column",
-      boxShadow: "0 -8px 28px rgba(0,0,0,0.35)",
-      backdropFilter: "blur(18px) saturate(1.2)",
-      webkitBackdropFilter: "blur(18px) saturate(1.2)",
-      paddingBottom: "env(safe-area-inset-bottom, 0px)",
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-around",
+      gap: "2px",
+      padding: "6px 8px",
+      boxShadow: "0 10px 28px rgba(0,0,0,0.28)",
       pointerEvents: "auto"
     });
 
-    // Profile-only CTAs — stacked so Details + Message stay above the icon bar
-    var profileRow = document.createElement("div");
-    profileRow.setAttribute("data-profile-row", "1");
-    Object.assign(profileRow.style, {
-      display: "none",
-      padding: "8px 10px 0",
-      boxSizing: "border-box",
-      gap: "8px",
-      flexDirection: "column"
-    });
+    // Floating white pill: Back · Favorites · Chats · Map · Settings
+    bar.appendChild(makeFloatingNavBtn("back"));
+    bar.appendChild(makeFloatingNavBtn("favorites"));
+    bar.appendChild(makeFloatingNavBtn("chats"));
+    bar.appendChild(makeFloatingNavBtn("map"));
+    bar.appendChild(makeFloatingNavBtn("settings"));
 
-    var detailsCta = makeBtn("ⓘ  Profile details", null, {
-      color: THEME.text,
-      bold: true
-    });
-    detailsCta.setAttribute("data-cmd", "details");
-    detailsCta.setAttribute("aria-label", "Profile details");
-    detailsCta.title = "Profile details";
-    Object.assign(detailsCta.style, {
-      width: "100%",
-      minHeight: "44px",
-      height: "44px",
-      borderRadius: "12px",
-      fontSize: "15px"
-    });
-
-    var messageCta = makeBtn("✉  Message", null, {
-      bg: THEME.accentBg,
-      color: "#fff",
-      bold: true,
-      primary: true
-    });
-    messageCta.setAttribute("data-cmd", "message");
-    messageCta.setAttribute("aria-label", "Message this profile");
-    messageCta.title = "Message this profile";
-    Object.assign(messageCta.style, {
-      width: "100%",
-      minHeight: "44px",
-      height: "44px",
-      borderRadius: "12px",
-      fontSize: "15px",
-      letterSpacing: "0.01em"
-    });
-
-    profileRow.appendChild(detailsCta);
-    profileRow.appendChild(messageCta);
-    bar.appendChild(profileRow);
-
-    var navRow = makeRow();
-    navRow.setAttribute("data-nav-row", "1");
-    navRow.style.paddingTop = "6px";
-    navRow.style.paddingBottom = "6px";
-    navRow.style.justifyContent = "space-around";
-    navRow.style.gap = "2px";
-
-    navRow.appendChild(makeNavIconBtn("map"));
-    navRow.appendChild(makeNavIconBtn("chats"));
-    navRow.appendChild(makeNavIconBtn("pinned", THEME.gold));
-    navRow.appendChild(makeNavIconBtn("favorites", THEME.gold));
-    navRow.appendChild(makeNavIconBtn("message", THEME.accent));
-    navRow.appendChild(makeNavIconBtn("send", THEME.green));
-    navRow.appendChild(makeNavIconBtn("back", THEME.textMute));
-    navRow.appendChild(makeNavIconBtn("settings", THEME.textDim));
-
-    bar.appendChild(navRow);
     bar.addEventListener(
       "click",
       function (e) {
@@ -2201,9 +2421,9 @@
 
   function setBtnTone(btn, active, baseColor) {
     if (!btn) return;
-    btn.style.color = active ? THEME.accent : baseColor || THEME.textDim;
-    btn.style.fontWeight = active ? "600" : "500";
-    btn.style.opacity = active ? "1" : "0.92";
+    btn.style.color = active ? THEME.accentBg : baseColor || THEME.barText;
+    btn.style.fontWeight = active ? "700" : "500";
+    btn.style.opacity = active ? "1" : "0.88";
   }
 
   function renderBar(state) {
@@ -2213,45 +2433,22 @@
       bar.setAttribute("data-view", state || "MAP");
       document.documentElement.setAttribute("data-sniffies-view", state || "MAP");
 
-      var profileRow = bar.querySelector("[data-profile-row]");
-      if (profileRow) {
-        profileRow.style.display = state === "PROFILE" ? "flex" : "none";
-      }
+      // Profile actions live in the right sidebar only
+      renderSidebar(state);
 
       var btns = {};
       qsa("[data-cmd]", bar).forEach(function (b) {
-        // Prefer the CTA row's message button when collecting; both share data-cmd
-        if (!btns[b.getAttribute("data-cmd")] || b.closest("[data-profile-row]")) {
-          btns[b.getAttribute("data-cmd")] = b;
-        }
+        btns[b.getAttribute("data-cmd")] = b;
       });
 
-      setBtnTone(btns.map, state === "MAP", THEME.textDim);
-      setBtnTone(btns.chats, state === "CHATS_LIST" || state === "CHAT", THEME.text);
-      setBtnTone(btns.pinned, false, THEME.gold);
-      setBtnTone(btns.favorites, false, THEME.gold);
-      setBtnTone(btns.back, false, THEME.textMute);
-      setBtnTone(btns.settings, false, THEME.textDim);
-
-      // Message = this profile only (separate from Chats list)
-      var messageIcons = qsa('[data-cmd="message"]', bar);
-      messageIcons.forEach(function (b) {
-        if (b.closest("[data-profile-row]")) return; // CTA row toggled above
-        b.style.display = state === "PROFILE" ? "" : "none";
-        setBtnTone(b, state === "PROFILE", THEME.accent);
-      });
-
-      // Send = bridge to native send in threads; also on profile when compose box exists
-      if (btns.send) {
-        var showSend =
-          state === "CHAT" || (state === "PROFILE" && !!getNativeChatTextArea());
-        btns.send.style.display = showSend ? "" : "none";
-        setBtnTone(btns.send, showSend, THEME.green);
-      }
+      setBtnTone(btns.map, state === "MAP", THEME.barText);
+      setBtnTone(btns.chats, state === "CHATS_LIST" || state === "CHAT", THEME.barText);
+      setBtnTone(btns.favorites, state === "PROFILE", THEME.barText);
+      setBtnTone(btns.back, false, THEME.barMute);
+      setBtnTone(btns.settings, false, THEME.barMute);
 
       updateContentInset();
       renderComposer(state);
-      // Composer height may change inset
       setTimeout(updateContentInset, 50);
     } catch (e) {
       console.error("[Sniffies iPhone] render error:", e);
@@ -2384,12 +2581,15 @@
       window.__sniffiesIntentBarIPhoneApi = {
         resolveViewState: resolveViewState,
         renderBar: renderBar,
+        renderSidebar: renderSidebar,
         renderComposer: renderComposer,
         refreshAiSuggestions: refreshAiSuggestions,
         getChatTextArea: getNativeChatTextArea,
         getSendButton: getNativeSendButton,
         insertAndSendMessage: insertAndSendMessage,
         findChatListHost: findChatListHost,
+        cmdShowProfileDetails: cmdShowProfileDetails,
+        cmdStartChat: cmdStartChat,
         SEL: SEL,
         version: VERSION
       };
