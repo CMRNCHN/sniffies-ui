@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.1
+// @version      1.2.2
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.2.1";
+  var VERSION = "1.2.2";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -1864,9 +1864,30 @@
     );
   }
 
+  /** True if the node has layout in the profile (may be scrolled out of the viewport). */
+  function isInProfileLayout(el, profile) {
+    if (!el || isOurUi(el) || isMapMarkerNoise(el)) return false;
+    try {
+      var cs = window.getComputedStyle(el);
+      if (cs.display === "none" || cs.visibility === "hidden") return false;
+    } catch (e) {}
+    var r = el.getBoundingClientRect();
+    var w = Math.max(r.width, el.offsetWidth || 0);
+    var h = Math.max(r.height, el.offsetHeight || 0);
+    if (w < 2 && h < 2) return false;
+    // Parked map markers live thousands of px off-canvas
+    if (r.left > 1600 || r.right < -400) return false;
+    if (profile && profile.contains && !profile.contains(el)) {
+      // Allow siblings in the same shell (info window / overlay)
+      var shell = profile.parentElement;
+      if (!shell || !shell.contains(el)) return false;
+    }
+    return true;
+  }
+
   /**
-   * Native profile "Message" control — including the wide text CTA at the bottom
-   * of the info sheet (rail scan skips width > 100, so sidebar used to miss it).
+   * Native profile "Message" / "Send message" CTA — including when it's below the
+   * fold in the scrolled info sheet (sidebar used to miss it because of on-screen checks).
    */
   function findNativeMessageControl() {
     var profile = findProfileHost() || qs(SEL.profile);
@@ -1877,9 +1898,9 @@
     var seen = [];
 
     function consider(el) {
-      if (!el || seen.indexOf(el) !== -1 || isOurUi(el) || isMapMarkerNoise(el)) return;
+      if (!el || seen.indexOf(el) !== -1) return;
       seen.push(el);
-      if (!isVisible(el) && !isOnScreen(el, 6)) return;
+      if (!isInProfileLayout(el, profile)) return;
 
       var aria = (el.getAttribute("aria-label") || "").trim().toLowerCase();
       var title = (el.getAttribute("title") || "").trim().toLowerCase();
@@ -1891,23 +1912,28 @@
       var blob = (aria + " " + title + " " + tid + " " + text + " " + railLabelFor(el))
         .toLowerCase()
         .replace(/\s+/g, " ");
-      if (!isMessageish(blob)) return;
       if (/missed|global|list|history|new messages|check for missed/.test(blob)) return;
 
+      var exactText = text === "message" || text === "send message" || text === "message cruiser";
+      var exactAria = aria === "message" || aria === "send message" || title === "message";
+      if (!exactText && !exactAria && !isMessageish(blob)) return;
+
       var score = 0;
-      if (text === "message") score += 60;
+      if (exactText) score += 80;
       else if (text.length && text.length < 28 && /\bmessage\b/.test(text)) score += 40;
-      if (aria === "message" || title === "message") score += 50;
+      if (exactAria) score += 70;
       else if (/\bmessage\b/.test(aria) || /\bmessage\b/.test(title)) score += 35;
       if (/startchat|sendmessage|messagecruiser|messagebutton|message-button/.test(tid))
         score += 45;
-      if (/fa-paper-plane|paper-plane|paperplane/.test(blob)) score += 28;
-      if (isOnScreen(el, 8)) score += 12;
-      if (profile && profile.contains && profile.contains(el)) score += 10;
+      if (/fa-paper-plane|paper-plane|paperplane/.test(blob)) score += 20;
+      if (isOnScreen(el, 8)) score += 8;
+      if (profile && profile.contains && profile.contains(el)) score += 14;
       var r = el.getBoundingClientRect();
-      // Prefer the wide text CTA the user can tap under the info section
-      if (r.width >= 72 && text === "message") score += 18;
-      if (r.width > 0 && r.width <= 56 && r.height <= 56 && !text) score += 6;
+      var w = Math.max(r.width, el.offsetWidth || 0);
+      // Prefer the wide text CTA under the info section
+      if (w >= 72 && exactText) score += 24;
+      // Deprioritize tiny icon guesses vs the text button
+      if (w > 0 && w <= 56 && !exactText && !exactAria) score -= 15;
 
       if (score > bestScore) {
         bestScore = score;
@@ -1922,7 +1948,7 @@
       for (var i = 0; i < nodes.length; i++) consider(nodes[i]);
     }
 
-    // Exact text / aria matches anywhere in the viewport (info sheet CTA)
+    // Exact text / aria matches in document (may be scrolled below the fold)
     var all = qsa('button, [role="button"], a');
     for (var j = 0; j < all.length; j++) {
       var el = all[j];
@@ -1932,10 +1958,59 @@
         .trim()
         .toLowerCase();
       var a = (el.getAttribute("aria-label") || "").trim().toLowerCase();
-      if (t === "message" || a === "message") consider(el);
+      if (
+        t === "message" ||
+        t === "send message" ||
+        a === "message" ||
+        a === "send message"
+      ) {
+        consider(el);
+      }
     }
 
     return bestScore >= 30 ? best : null;
+  }
+
+  /** Scroll the profile Message CTA into view, then click it (async-safe). */
+  function activateNativeMessageControl(toast) {
+    var el = findNativeMessageControl();
+    if (!el) return false;
+
+    function doClick() {
+      return clickNative(el, toast || "Message");
+    }
+
+    if (isOnScreen(el, 10)) return doClick();
+
+    try {
+      el.scrollIntoView({ block: "center", behavior: "auto" });
+    } catch (e) {}
+
+    // Nudge scrollable profile / info ancestors
+    var node = el.parentElement;
+    var hops = 0;
+    while (node && hops < 8) {
+      try {
+        if (node.scrollHeight > node.clientHeight + 24) {
+          var er = el.getBoundingClientRect();
+          var nr = node.getBoundingClientRect();
+          node.scrollTop += er.top - nr.top - Math.min(120, nr.height * 0.25);
+        }
+      } catch (e2) {}
+      node = node.parentElement;
+      hops++;
+    }
+
+    // Click after layout settles (iOS often needs a tick after scrollIntoView)
+    setTimeout(function () {
+      if (!doClick()) {
+        try {
+          el.click();
+          if (toast) showToast(toast, "success");
+        } catch (e3) {}
+      }
+    }, 140);
+    return true;
   }
 
   function classifyProfileRail() {
@@ -2131,15 +2206,18 @@
 
     var profile = findProfileHost();
     if (profile) {
-      // Prefer the native text "Message" under profile info (what works when tapped)
-      var nativeMsg = findNativeMessageControl();
-      if (clickNative(nativeMsg, "Message")) return;
+      // Scroll to the below-the-fold text "Message" CTA and click it
+      if (activateNativeMessageControl("Message")) return;
 
       var rail = classifyProfileRail();
-      if (rail.message && rail.message !== nativeMsg && clickNative(rail.message, "Message"))
+      // Only use rail Message if it's a real messageish control (never a position guess)
+      if (
+        rail.message &&
+        isMessageish(railLabelFor(rail.message)) &&
+        clickNative(rail.message, "Message")
+      ) {
         return;
-      // Our sidebar covers the native plane — click through at the same spot
-      if (clickNativeUnderSidebar("message", "Message")) return;
+      }
 
       // Compose-on-profile already open
       if (focusChatComposer("Type your message")) return;
@@ -2760,13 +2838,17 @@
     Object.assign(actions.style, {
       display: "flex",
       gap: "8px",
-      marginTop: "16px"
+      marginTop: "4px",
+      marginBottom: "14px"
     });
     var msgBtn = makeBtn(
       "Message",
       function () {
         overlay.remove();
-        cmdStartChat();
+        // Same path as sidebar — scroll to native CTA + click
+        setTimeout(function () {
+          cmdStartChat();
+        }, 40);
       },
       { bg: THEME.accentBg, color: "#fff", bold: true, primary: true }
     );
@@ -2783,7 +2865,12 @@
     done.style.minHeight = "44px";
     actions.appendChild(msgBtn);
     actions.appendChild(done);
-    sheet.appendChild(actions);
+    // Pin actions under the title so Message is always reachable without scrolling
+    if (sheet.childNodes.length > 1) {
+      sheet.insertBefore(actions, sheet.childNodes[1]);
+    } else {
+      sheet.appendChild(actions);
+    }
 
     overlay.appendChild(sheet);
     document.body.appendChild(overlay);
@@ -2996,6 +3083,7 @@
     var el = ensureComposerHost();
     el.innerHTML = "";
     el.setAttribute("data-dock", "1");
+    el.setAttribute("data-version", VERSION);
     Object.assign(el.style, {
       position: "fixed",
       left: "0",
@@ -3003,56 +3091,75 @@
       zIndex: "1000014",
       display: "flex",
       flexDirection: "column",
-      gap: "4px",
-      padding: "5px 10px 4px",
+      gap: "0",
+      padding: "4px 8px 3px",
       boxSizing: "border-box",
       background: THEME.dockBg,
       borderTop: "1px solid " + THEME.border,
       borderBottom: "none",
-      borderRadius: "14px 14px 0 0",
+      borderRadius: "12px 12px 0 0",
       boxShadow: "none",
       backdropFilter: "blur(20px) saturate(1.25)",
       webkitBackdropFilter: "blur(20px) saturate(1.25)"
     });
 
-    var quickRow = makeChipRow();
-    quickRow.style.gap = "5px";
+    // Single short row: · ·· ··· pics | Message… | send  (no word chips)
+    var dockRow = document.createElement("div");
+    Object.assign(dockRow.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "5px",
+      minHeight: "36px"
+    });
+
+    var marks = document.createElement("div");
+    Object.assign(marks.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "3px",
+      flexShrink: "0",
+      maxWidth: "42%",
+      overflowX: "auto",
+      webkitOverflowScrolling: "touch",
+      scrollbarWidth: "none"
+    });
     loadQuickMessages().forEach(function (msg, idx) {
       var text = msg.text;
       var label = msg.label || "Quick " + (idx + 1);
-      quickRow.appendChild(
-        makeMarkChip({
-          mark: markGlyphForIndex(idx),
-          label: label,
-          title: label + " — " + (text || ""),
-          action: function () {
-            setComposerText(text);
-          }
-        })
-      );
+      var chip = makeMarkChip({
+        mark: markGlyphForIndex(idx),
+        label: label,
+        title: label + " — " + (text || ""),
+        action: function () {
+          setComposerText(text);
+        }
+      });
+      chip.style.width = "24px";
+      chip.style.minWidth = "24px";
+      chip.style.height = "24px";
+      chip.style.minHeight = "24px";
+      chip.style.fontSize = "11px";
+      marks.appendChild(chip);
     });
-    quickRow.appendChild(
-      makeMarkChip({
-        icon: "photos",
-        label: "Pics",
-        title: "Pics",
-        color: THEME.gold,
-        action: cmdPics
-      })
-    );
-    if (stateData.aiEnabled) {
-      appendAiChips(quickRow, function () {
+    var pics = makeMarkChip({
+      icon: "photos",
+      label: "Pics",
+      title: "Pics",
+      color: THEME.gold,
+      action: cmdPics
+    });
+    pics.style.width = "24px";
+    pics.style.minWidth = "24px";
+    pics.style.height = "24px";
+    pics.style.minHeight = "24px";
+    marks.appendChild(pics);
+    // AI marks only when a custom endpoint is configured (keeps dock short)
+    if (stateData.aiEnabled && stateData.aiEndpoint) {
+      appendAiChips(marks, function () {
         renderComposer("CHAT");
       });
     }
-    el.appendChild(quickRow);
-
-    var inputRow = document.createElement("div");
-    Object.assign(inputRow.style, {
-      display: "flex",
-      alignItems: "flex-end",
-      gap: "7px"
-    });
+    dockRow.appendChild(marks);
 
     var ta = document.createElement("textarea");
     ta.rows = 1;
@@ -3061,15 +3168,15 @@
     Object.assign(ta.style, {
       flex: "1",
       resize: "none",
-      minHeight: "34px",
-      maxHeight: "72px",
-      padding: "7px 12px",
-      borderRadius: "17px",
+      minHeight: "32px",
+      maxHeight: "64px",
+      padding: "6px 10px",
+      borderRadius: "16px",
       border: "1px solid " + THEME.border,
       background: THEME.inputBg,
       color: THEME.text,
       fontSize: "16px",
-      lineHeight: "1.25",
+      lineHeight: "1.2",
       fontFamily: "-apple-system, BlinkMacSystemFont, system-ui, sans-serif",
       outline: "none"
     });
@@ -3081,8 +3188,7 @@
     });
     ta.addEventListener("input", function () {
       ta.style.height = "auto";
-      ta.style.height = Math.min(72, ta.scrollHeight) + "px";
-      // Keep dock CSS vars in sync as the field grows — don't yank scroll while typing
+      ta.style.height = Math.min(64, ta.scrollHeight) + "px";
       var m = measureDockHeight();
       document.documentElement.style.setProperty("--sniffies-iphone-dock-h", m.dockH + "px");
       document.documentElement.style.setProperty(
@@ -3100,12 +3206,12 @@
     var sendBtn = document.createElement("button");
     sendBtn.type = "button";
     sendBtn.setAttribute("aria-label", "Send");
-    sendBtn.appendChild(makeSvgIcon("send", 16));
+    sendBtn.appendChild(makeSvgIcon("send", 15));
     Object.assign(sendBtn.style, {
-      width: "34px",
-      height: "34px",
-      minWidth: "34px",
-      minHeight: "34px",
+      width: "32px",
+      height: "32px",
+      minWidth: "32px",
+      minHeight: "32px",
       padding: "0",
       border: "none",
       borderRadius: "50%",
@@ -3124,9 +3230,9 @@
       cmdComposerSend();
     });
 
-    inputRow.appendChild(ta);
-    inputRow.appendChild(sendBtn);
-    el.appendChild(inputRow);
+    dockRow.appendChild(ta);
+    dockRow.appendChild(sendBtn);
+    el.appendChild(dockRow);
 
     var bar = document.getElementById(BAR_ID);
     var barH = bar ? Math.ceil(bar.getBoundingClientRect().height) : 52;
@@ -3859,6 +3965,7 @@
         cmdShowProfileDetails: cmdShowProfileDetails,
         cmdStartChat: cmdStartChat,
         findNativeMessageControl: findNativeMessageControl,
+        activateNativeMessageControl: activateNativeMessageControl,
         classifyProfileRail: classifyProfileRail,
         dumpProfileRail: dumpProfileRail,
         dumpProfileDebug: dumpProfileDebug,

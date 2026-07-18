@@ -303,7 +303,7 @@
       // Wide text "Message" CTA under info (rail scan skips width>100) — sidebar must still hit it
       clearFixture();
       fixture.innerHTML = `
-        <app-profile style="display:block;position:relative;width:360px;height:520px">
+        <app-profile style="display:block;position:relative;width:360px;height:520px;overflow:auto">
           <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
           <div class="profile-section"><div>Into</div><div>Cars</div></div>
           <button type="button" class="profile-message-cta" style="display:block;width:220px;height:44px">Message</button>
@@ -318,6 +318,24 @@
       await wait(80);
       log(assert(!!api.findNativeMessageControl?.(), "findNativeMessageControl finds text Message CTA"));
       log(assert(textMsg, "sidebar Message clicks wide text Message CTA"));
+
+      // Below-the-fold Message CTA (the real phone case — must scroll then click)
+      clearFixture();
+      fixture.innerHTML = `
+        <app-profile id="tall-profile" style="display:block;position:relative;width:360px;height:280px;overflow:auto">
+          <div data-testid="profileHeadlineTableContainer">Registered Cruiser</div>
+          <div style="height:600px">spacer</div>
+          <button type="button" class="profile-message-cta-offscreen" style="display:block;width:220px;height:44px">Message</button>
+        </app-profile>`;
+      await wait(120);
+      api.renderBar(api.resolveViewState());
+      let offscreenMsg = false;
+      const offCta = document.querySelector(".profile-message-cta-offscreen");
+      if (offCta) offCta.addEventListener("click", () => { offscreenMsg = true; }, { once: true });
+      log(assert(!!api.findNativeMessageControl?.(), "finds Message CTA even when below the fold"));
+      document.querySelector('#sniffies-iphone-sidebar [data-cmd="message"]')?.click();
+      await wait(280);
+      log(assert(offscreenMsg, "sidebar Message scrolls to + clicks below-the-fold CTA"));
 
       sceneProfileCompose();
       await wait(120);
