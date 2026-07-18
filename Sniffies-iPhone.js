@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.1.3
+// @version      1.1.4
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.1.3";
+  var VERSION = "1.1.4";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -1230,6 +1230,12 @@
 
   // Native profile right-rail — classify by label, then position (never guess info→gallery)
   function railLabelFor(el) {
+    if (!el) return "";
+    var icon = el.querySelector
+      ? el.querySelector(
+          "i, svg, [class*='icon'], [class*='Icon'], [class*='fa-'], [class*='sniffiesIcon']"
+        )
+      : null;
     return (
       (el.getAttribute("aria-label") || "") +
       " " +
@@ -1237,13 +1243,38 @@
       " " +
       (el.getAttribute("data-testid") || "") +
       " " +
+      (el.getAttribute("data-cy") || "") +
+      " " +
       (el.className && typeof el.className === "string" ? el.className : "") +
+      " " +
+      (icon && icon.className && typeof icon.className === "string" ? icon.className : "") +
       " " +
       (el.textContent || "")
     )
       .toLowerCase()
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function isClickableRailHost(el) {
+    if (!el || el === document.body || el === document.documentElement) return false;
+    var tag = (el.tagName || "").toLowerCase();
+    if (tag === "button" || tag === "a") return true;
+    if (el.getAttribute("role") === "button") return true;
+    if (el.getAttribute("tabindex") != null) return true;
+    if (typeof el.onclick === "function") return true;
+    if (el.hasAttribute("ng-reflect-router-link") || el.hasAttribute("routerlink")) return true;
+    // Icon-only Angular hosts
+    if (
+      el.querySelector &&
+      el.querySelector(
+        "i.fa, i[class*='fa-'], [class*='sniffiesIcon'], svg, [class*='paper-plane'], [class*='paperPlane']"
+      )
+    ) {
+      var r = el.getBoundingClientRect();
+      if (r.width > 0 && r.width <= 96 && r.height > 0 && r.height <= 96) return true;
+    }
+    return false;
   }
 
   function getProfileActionRail() {
@@ -1253,30 +1284,139 @@
     if (pr.width < 40 || pr.height < 40) return [];
     var items = [];
     var seen = [];
-    // Profile + document (some rail icons live outside app-profile)
     var roots = [profile, document.body];
+    var selector =
+      'button, [role="button"], a, [tabindex], i.fa, i[class*="fa-"], [class*="sniffiesIcon"], [class*="paper-plane"], [class*="paperPlane"]';
+
     for (var ri = 0; ri < roots.length; ri++) {
-      var nodes = qsa('button, [role="button"], a', roots[ri]);
+      var nodes = qsa(selector, roots[ri]);
       for (var i = 0; i < nodes.length; i++) {
         var el = nodes[i];
-        if (isOurUi(el) || seen.indexOf(el) !== -1) continue;
-        var r = el.getBoundingClientRect();
+        // Prefer clickable host over bare <i>
+        var host = el;
+        var hops = 0;
+        while (host && hops < 4 && !isClickableRailHost(host)) {
+          host = host.parentElement;
+          hops++;
+        }
+        if (!host || !isClickableRailHost(host)) host = el.parentElement || el;
+        if (isOurUi(host) || seen.indexOf(host) !== -1) continue;
+
+        var r = host.getBoundingClientRect();
         if (r.width < 2 || r.height < 2) continue;
-        if (r.width > 84 || r.height > 84) continue;
-        var nearRightEdge = r.right > window.innerWidth - 96;
+        if (r.width > 100 || r.height > 100) continue;
+        var nearRightEdge = r.right > window.innerWidth - 110;
         var onProfileRight =
-          r.left > pr.left + pr.width * 0.58 && r.right > pr.right - 96;
+          r.left > pr.left + pr.width * 0.55 && r.right > pr.right - 110;
         if (!nearRightEdge && !onProfileRight) continue;
-        // Stay roughly within the profile vertical band
-        if (r.bottom < pr.top - 20 || r.top > pr.bottom + 20) continue;
-        seen.push(el);
-        items.push({ el: el, top: r.top, label: railLabelFor(el) });
+        if (r.bottom < pr.top - 40 || r.top > pr.bottom + 40) continue;
+
+        seen.push(host);
+        items.push({
+          el: host,
+          top: r.top,
+          label: railLabelFor(host),
+          tag: (host.tagName || "").toLowerCase(),
+          testid: host.getAttribute("data-testid") || "",
+          aria: host.getAttribute("aria-label") || ""
+        });
       }
     }
     items.sort(function (a, b) {
       return a.top - b.top;
     });
     return items;
+  }
+
+  function dumpProfileRail() {
+    var rail = getProfileActionRail();
+    var classified = classifyProfileRail();
+    var dump = {
+      version: VERSION,
+      url: location.href,
+      view: resolveViewState(),
+      viewport: { w: window.innerWidth, h: window.innerHeight },
+      railCount: rail.length,
+      classified: {
+        report: !!(classified.report),
+        pin: !!(classified.pin),
+        info: !!(classified.info),
+        photos: !!(classified.photos),
+        message: !!(classified.message)
+      },
+      items: rail.map(function (item, idx) {
+        var r = item.el.getBoundingClientRect();
+        return {
+          i: idx,
+          tag: item.tag,
+          aria: item.aria,
+          testid: item.testid,
+          label: item.label.slice(0, 160),
+          rect: {
+            t: Math.round(r.top),
+            l: Math.round(r.left),
+            w: Math.round(r.width),
+            h: Math.round(r.height)
+          }
+        };
+      })
+    };
+    var text = JSON.stringify(dump, null, 2);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        var ta = document.createElement("textarea");
+        ta.value = text;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand("copy");
+        ta.remove();
+      }
+      showToast("Rail dump copied (" + rail.length + ")", "success");
+    } catch (e) {
+      console.log("[Sniffies iPhone] rail dump", dump);
+      showToast("Rail dump logged to console", "error");
+    }
+    console.log("[Sniffies iPhone] rail dump", dump);
+    return dump;
+  }
+
+  /** Hide our sidebar briefly and click whatever native control sits under a sidebar btn */
+  function clickNativeUnderSidebar(cmd, toast) {
+    var side = document.getElementById(SIDEBAR_ID);
+    if (!side || side.style.display === "none") return false;
+    var btn = side.querySelector('[data-cmd="' + cmd + '"]');
+    if (!btn) return false;
+    var r = btn.getBoundingClientRect();
+    var x = r.left + r.width / 2;
+    var y = r.top + r.height / 2;
+
+    side.style.visibility = "hidden";
+    side.style.pointerEvents = "none";
+    var hit = null;
+    try {
+      hit = document.elementFromPoint(x, y);
+    } catch (e) {}
+    side.style.visibility = "";
+    side.style.pointerEvents = "auto";
+
+    if (!hit || isOurUi(hit)) return false;
+
+    var el = hit;
+    var hops = 0;
+    while (el && hops < 6) {
+      if (!isOurUi(el) && isClickableRailHost(el)) {
+        return clickNative(el, toast);
+      }
+      el = el.parentElement;
+      hops++;
+    }
+    // Last resort: click the hit target itself
+    if (!isOurUi(hit)) return clickNative(hit, toast);
+    return false;
   }
 
   function isPhotoish(label) {
@@ -1290,7 +1430,9 @@
     return (
       /send message|message cruiser|start (a )?chat|private (chat|message)/.test(label) ||
       (/\bmessage\b/.test(label) && !/missed|global|list|history/.test(label)) ||
-      /\bpaper[\s-]?plane\b|\bairplane\b|\bdm\b/.test(label)
+      /\bpaper[\s-]?plane\b|\bpaperplane\b|\bairplane\b|\bdm\b|fa-paper-plane|fa-plane/.test(
+        label
+      )
     );
   }
 
@@ -1447,6 +1589,8 @@
     }
     var rail = classifyProfileRail();
     if (clickNative(rail.message, "Message")) return;
+    // Our sidebar covers the native plane — click through at the same spot
+    if (clickNativeUnderSidebar("message", "Message")) return;
 
     // Focus profile compose box if already open
     var native = getNativeChatTextArea();
@@ -1458,7 +1602,10 @@
       showToast("Type your message", "success");
       return;
     }
-    showToast("Message control not found", "error");
+
+    // Capture what we saw so you can paste it back here
+    dumpProfileRail();
+    showToast("Message not found — rail dump copied", "error");
   }
 
   function cmdShowProfileDetails() {
@@ -1475,6 +1622,7 @@
     // Temporary: open their gallery. Send-pics flow TBD.
     var rail = classifyProfileRail();
     if (clickNative(rail.photos, "Photos")) return;
+    if (clickNativeUnderSidebar("pics", "Photos")) return;
     showToast("Photos — send from chat coming next", "error");
   }
 
@@ -1482,6 +1630,7 @@
     // Star → Pin for Later
     var rail = classifyProfileRail();
     if (clickNative(rail.pin, "Pinned for later")) return;
+    if (clickNativeUnderSidebar("favorites", "Pinned for later")) return;
     if (clickNative(getFavoriteButton(), "Pinned for later")) return;
     showToast("Pin for Later not found", "error");
   }
@@ -1490,6 +1639,7 @@
     // Block / Report on the native rail (opens report/block sheet)
     var rail = classifyProfileRail();
     if (clickNative(rail.report, "Report / Block")) return;
+    if (clickNativeUnderSidebar("shield", "Report / Block")) return;
 
     // Fallback: any report/block control on the profile
     var profile = findProfileHost() || qs(SEL.profile);
@@ -3033,6 +3183,7 @@
         cmdShowProfileDetails: cmdShowProfileDetails,
         cmdStartChat: cmdStartChat,
         classifyProfileRail: classifyProfileRail,
+        dumpProfileRail: dumpProfileRail,
         scrapeProfileDetails: scrapeProfileDetails,
         renderProfileDetailsModal: renderProfileDetailsModal,
         SEL: SEL,
