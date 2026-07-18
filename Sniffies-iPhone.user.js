@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.3
+// @version      1.2.4
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.2.3";
+  var VERSION = "1.2.4";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -44,7 +44,7 @@
   // Cohesive 24×24 stroke icons (currentColor). Bottom bar + profile sidebar share one set.
   var NAV_ICONS = {
     back: { icon: "back", label: "Back" },
-    favorites: { icon: "star", label: "Favorites" },
+    favorites: { icon: "pin", label: "Pinned" },
     chats: { icon: "chat", label: "Chats" },
     map: { icon: "map", label: "Map" },
     settings: { icon: "sliders", label: "Settings" },
@@ -2215,7 +2215,10 @@
     return null;
   }
 
-  /** Last-resort: open /profile/:id/chat when the native Message CTA can't be clicked. */
+  /**
+   * Open chat via an in-app router link only — never location.assign
+   * (full navigation flashes the map / a broken intermediate screen).
+   */
   function tryOpenProfileChatRoute(toast) {
     if (isProfileChatPath()) return false;
     var id = profileIdFromDom();
@@ -2224,15 +2227,10 @@
     var link =
       qs('a[href="' + path + '"]') ||
       qs('a[href*="/profile/' + id + '/chat"]') ||
+      qs('[routerlink*="/chat"]') ||
       qs('[ng-reflect-router-link*="chat"]');
     if (link && !isOurUi(link) && clickNative(link, toast || "Message")) return true;
-    try {
-      if (toast) showToast(toast || "Opening chat…", "success");
-      location.assign(path);
-      return true;
-    } catch (e) {
-      return false;
-    }
+    return false;
   }
 
   function ensureOpenedChat(toast) {
@@ -2243,10 +2241,11 @@
         focusChatComposer(toast || "Type your message");
         return;
       }
-      if (tries === 3 && tryOpenProfileChatRoute(null)) return;
-      if (tries < 8) setTimeout(tick, 180);
+      // Retry the native CTA once — do NOT hard-navigate (map flash)
+      if (tries === 4) activateNativeMessageControl(null);
+      if (tries < 10) setTimeout(tick, 200);
     }
-    setTimeout(tick, 200);
+    setTimeout(tick, 220);
   }
 
   function cmdStartChat() {
@@ -2276,8 +2275,11 @@
         return;
       }
 
-      // 3) Route fallback — locks profile → individual chat
-      if (tryOpenProfileChatRoute("Message")) return;
+      // 3) In-app router link only (no location.assign)
+      if (tryOpenProfileChatRoute("Message")) {
+        ensureOpenedChat("Type your message");
+        return;
+      }
 
       // 4) Compose-on-profile already open
       if (focusChatComposer("Type your message")) return;
@@ -2289,7 +2291,6 @@
     }
 
     if (isChatThreadOpen() && focusChatComposer("Type your message")) return;
-    if (tryOpenProfileChatRoute("Message")) return;
     showToast("Open a profile first", "error");
   }
 
@@ -2299,8 +2300,141 @@
       showToast("Open a profile first", "error");
       return;
     }
-    // Use our sectioned sheet — native details sit under the bar as a flat word dump
+    // Our sectioned sheet replaces the native info slide-up
     renderProfileDetailsModal();
+  }
+
+  function isNativeProfileInfoControl(el) {
+    if (!el || isOurUi(el) || isMapMarkerNoise(el)) return false;
+    var host = el;
+    var hops = 0;
+    while (host && hops < 5 && !isClickableRailHost(host)) {
+      host = host.parentElement;
+      hops++;
+    }
+    if (!host) host = el;
+    var L = railLabelFor(host);
+    var tid = (host.getAttribute("data-testid") || "").toLowerCase();
+    if (/info|details|about|fullstats|full-stats/.test(tid)) return true;
+    if (/\b(info|details?|about)\b/.test(L) && !isPhotoish(L) && !isMessageish(L)) return true;
+    if (/fa-info|fa-circle-info|sniffiesicon.*info/.test(L)) return true;
+    return false;
+  }
+
+  function looksLikeNativeProfileDetailsSheet(el) {
+    if (!el || el.nodeType !== 1 || isOurUi(el)) return false;
+    var tag = (el.tagName || "").toLowerCase();
+    var tid = (el.getAttribute("data-testid") || "").toLowerCase();
+    var cls = (typeof el.className === "string" ? el.className : "").toLowerCase();
+    var blob = tag + " " + tid + " " + cls;
+    if (
+      /profile-full|fullstats|full-stats|profiledetail|profile-detail|cruiser-full|info-window|infowindow|bottom-sheet|bottomsheet|mat-bottom-sheet/.test(
+        blob
+      )
+    ) {
+      return true;
+    }
+    // Heuristic: large bottom sheet that appeared over an open profile
+    if (!findProfileHost()) return false;
+    try {
+      var r = el.getBoundingClientRect();
+      var vh = window.innerHeight || 1;
+      if (
+        r.width > window.innerWidth * 0.7 &&
+        r.height > vh * 0.35 &&
+        r.bottom >= vh - 8 &&
+        r.top > vh * 0.2 &&
+        /sheet|drawer|panel|overlay|modal|dialog/.test(blob)
+      ) {
+        return true;
+      }
+    } catch (e) {}
+    return false;
+  }
+
+  function suppressNativeDetailsAndShowOurs(nativeEl) {
+    if (document.getElementById(DETAILS_ID)) {
+      if (nativeEl && nativeEl.style) {
+        nativeEl.style.setProperty("display", "none", "important");
+        nativeEl.style.setProperty("visibility", "hidden", "important");
+        nativeEl.style.setProperty("pointer-events", "none", "important");
+      }
+      return;
+    }
+    if (nativeEl && nativeEl.style) {
+      nativeEl.style.setProperty("display", "none", "important");
+      nativeEl.style.setProperty("visibility", "hidden", "important");
+      nativeEl.style.setProperty("pointer-events", "none", "important");
+    }
+    if (findProfileHost()) renderProfileDetailsModal();
+  }
+
+  function installNativeDetailsInterceptor() {
+    if (window.__sniffiesIphoneDetailsHook) return;
+    window.__sniffiesIphoneDetailsHook = true;
+
+    document.addEventListener(
+      "click",
+      function (e) {
+        if (resolveViewState() !== "PROFILE" && !findProfileHost()) return;
+        var t = e.target;
+        if (!t || isOurUi(t)) return;
+        var host = t;
+        var hops = 0;
+        while (host && hops < 6) {
+          if (isNativeProfileInfoControl(host)) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.stopImmediatePropagation();
+            cmdShowProfileDetails();
+            return;
+          }
+          host = host.parentElement;
+          hops++;
+        }
+      },
+      true
+    );
+
+    if (!window.MutationObserver) return;
+    var timer = null;
+    var obs = new MutationObserver(function (mutations) {
+      if (timer) return;
+      timer = setTimeout(function () {
+        timer = null;
+        if (!findProfileHost()) return;
+        if (document.getElementById(DETAILS_ID)) {
+          // Keep native sheets suppressed while ours is open
+          var open = qsa(
+            'app-info-window, [class*="bottom-sheet"], [class*="bottomSheet"], [class*="full-stats"], [class*="fullStats"], [data-testid*="FullStats"], [data-testid*="fullStats"]'
+          );
+          for (var i = 0; i < open.length; i++) {
+            if (!isOurUi(open[i]) && isVisible(open[i])) suppressNativeDetailsAndShowOurs(open[i]);
+          }
+          return;
+        }
+        for (var m = 0; m < mutations.length; m++) {
+          var nodes = mutations[m].addedNodes;
+          for (var n = 0; n < nodes.length; n++) {
+            var el = nodes[n];
+            if (el.nodeType !== 1) continue;
+            if (looksLikeNativeProfileDetailsSheet(el)) {
+              suppressNativeDetailsAndShowOurs(el);
+              return;
+            }
+            var nested = el.querySelector &&
+              el.querySelector(
+                'app-info-window, [class*="bottom-sheet"], [class*="full-stats"], [class*="fullStats"], [data-testid*="FullStats"]'
+              );
+            if (nested && looksLikeNativeProfileDetailsSheet(nested)) {
+              suppressNativeDetailsAndShowOurs(nested);
+              return;
+            }
+          }
+        }
+      }, 40);
+    });
+    obs.observe(document.documentElement, { childList: true, subtree: true });
   }
 
   function cmdProfilePics() {
@@ -2311,37 +2445,101 @@
     showToast("Photos — send from chat coming next", "error");
   }
 
-  function cmdProfileFavorite() {
-    // Star → Pin user (chat header) or Pin for Later (profile rail)
-    var pinBtn = qs('[data-testid="pinUserButton"]');
-    if (pinBtn && isOnScreen(pinBtn, 12) && clickNative(pinBtn, "Pinned")) return;
-    var rail = classifyProfileRail();
-    if (clickNative(rail.pin, "Pinned for later")) return;
-    if (clickNativeUnderSidebar("favorites", "Pinned for later")) return;
-    if (clickNative(getFavoriteButton(), "Pinned for later")) return;
-    showToast("Pin not found", "error");
-  }
-
-  function cmdProfileShield() {
-    // Block / Report on the native rail (opens report/block sheet)
-    var rail = classifyProfileRail();
-    if (clickNative(rail.report, "Report / Block")) return;
-    if (clickNativeUnderSidebar("shield", "Report / Block")) return;
-
-    // Fallback: any report/block control on the profile
+  function findBlockControl() {
+    var roots = [];
     var profile = findProfileHost() || qs(SEL.profile);
     if (profile) {
-      var nodes = qsa('button, [role="button"], a', profile);
+      roots = roots.concat(getProfileShellRoots(profile));
+      roots.push(profile);
+    }
+    roots.push(document.body);
+    var best = null;
+    var bestScore = 0;
+    var seen = [];
+    for (var r = 0; r < roots.length; r++) {
+      if (!roots[r]) continue;
+      var nodes = qsa('button, [role="button"], a', roots[r]);
       for (var i = 0; i < nodes.length; i++) {
         var el = nodes[i];
-        if (isOurUi(el) || !isVisible(el)) continue;
+        if (!el || seen.indexOf(el) !== -1 || isOurUi(el) || isMapMarkerNoise(el)) continue;
+        seen.push(el);
+        if (!isVisible(el) && !isInProfileLayout(el, profile)) continue;
         var L = railLabelFor(el);
-        if (/report cruiser|block cruiser|\breport\b|\bblock\b/.test(L)) {
-          if (clickNative(el, "Report / Block")) return;
+        var text = stripControls(el.textContent || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .toLowerCase();
+        var aria = (el.getAttribute("aria-label") || "").toLowerCase();
+        var score = 0;
+        if (text === "block" || aria === "block" || /block cruiser/.test(L)) score += 80;
+        else if (/\bblock\b/.test(L) && !/report/.test(L)) score += 60;
+        else if (/\bblock\b/.test(L)) score += 35;
+        else continue;
+        if (isOnScreen(el, 8)) score += 10;
+        if (score > bestScore) {
+          bestScore = score;
+          best = el;
         }
       }
     }
-    showToast("Block / Report not found", "error");
+    return bestScore >= 35 ? best : null;
+  }
+
+  function confirmBlockInDialog() {
+    var nodes = qsa(
+      'button, [role="button"], [data-testid*="block"], [data-testid*="Block"]'
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      var el = nodes[i];
+      if (isOurUi(el) || !isVisible(el)) continue;
+      var t = stripControls(el.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase();
+      var a = (el.getAttribute("aria-label") || "").toLowerCase();
+      if (
+        t === "block" ||
+        t === "block cruiser" ||
+        t === "yes, block" ||
+        a === "block" ||
+        a === "block cruiser"
+      ) {
+        // Prefer confirm buttons inside dialogs/sheets
+        if (
+          el.closest(
+            '[role="dialog"], mat-dialog-container, .modal, [class*="modal"], [class*="dialog"], [class*="sheet"]'
+          ) ||
+          t.indexOf("block") === 0
+        ) {
+          clickNative(el, "Blocked");
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function cmdProfileShield() {
+    var blockBtn = findBlockControl();
+    if (blockBtn && clickNative(blockBtn, "Block")) {
+      setTimeout(function () {
+        if (!confirmBlockInDialog()) {
+          setTimeout(confirmBlockInDialog, 350);
+        }
+      }, 280);
+      return;
+    }
+
+    var rail = classifyProfileRail();
+    if (rail.report && /\bblock\b/.test(railLabelFor(rail.report)) && clickNative(rail.report, "Block")) {
+      setTimeout(confirmBlockInDialog, 280);
+      return;
+    }
+    if (clickNativeUnderSidebar("shield", "Block")) {
+      setTimeout(confirmBlockInDialog, 280);
+      return;
+    }
+    showToast("Block control not found", "error");
   }
 
   // Labels used by Sniffies profile panels (match native section chrome)
@@ -3704,11 +3902,8 @@
     try {
       if (cmd === "map") cmdGoToMap();
       else if (cmd === "chats") cmdOpenChats();
-      else if (cmd === "pinned") cmdPinned();
-      else if (cmd === "favorites" || cmd === "saved") {
-        if (resolveViewState() === "PROFILE") cmdProfileFavorite();
-        else cmdFavorites();
-      } else if (cmd === "message" || cmd === "chat") cmdStartChat();
+      else if (cmd === "pinned" || cmd === "favorites" || cmd === "saved") cmdPinned();
+      else if (cmd === "message" || cmd === "chat") cmdStartChat();
       else if (cmd === "details") cmdShowProfileDetails();
       else if (cmd === "pics") cmdProfilePics();
       else if (cmd === "shield") cmdProfileShield();
@@ -3807,12 +4002,12 @@
 
   function ensureSidebar() {
     var side = document.getElementById(SIDEBAR_ID);
-    if (side && side.getAttribute("data-ready") === "3") return side;
+    if (side && side.getAttribute("data-ready") === "4") return side;
 
     if (side) side.remove();
     side = document.createElement("div");
     side.id = SIDEBAR_ID;
-    side.setAttribute("data-ready", "3");
+    side.setAttribute("data-ready", "4");
     Object.assign(side.style, {
       position: "fixed",
       top: "auto",
@@ -3837,10 +4032,9 @@
       pointerEvents: "auto"
     });
 
-    // Block · Pin · Details · Photos · Message
-    side.appendChild(makeSidebarBtn("shield", "block", "Block / Report"));
-    side.appendChild(makeSidebarBtn("favorites", "star", "Pin for Later"));
-    side.appendChild(makeSidebarBtn("details", "info", "Profile details"));
+    // Block · Pinned · Photos · Message (no info — our details replace native slide-up)
+    side.appendChild(makeSidebarBtn("shield", "block", "Block"));
+    side.appendChild(makeSidebarBtn("pinned", "pin", "Pinned chats"));
     side.appendChild(makeSidebarBtn("pics", "photos", "Photos"));
     side.appendChild(makeSidebarBtn("message", "send", "Send message"));
 
@@ -3861,6 +4055,41 @@
     return side;
   }
 
+  function findProfilePhotoBandBottom(profile) {
+    if (!profile) return null;
+    var bottoms = [];
+    var imgs = qsa("img", profile);
+    for (var i = 0; i < imgs.length; i++) {
+      var img = imgs[i];
+      if (isOurUi(img) || !isVisible(img)) continue;
+      var r = img.getBoundingClientRect();
+      if (r.width < 36 || r.height < 36) continue;
+      if (r.bottom < 40 || r.top > window.innerHeight) continue;
+      bottoms.push(r.bottom);
+    }
+    bottoms.sort(function (a, b) {
+      return a - b;
+    });
+    // Prefer the 3rd photo's bottom when present
+    if (bottoms.length >= 3) return bottoms[2];
+    if (bottoms.length) return bottoms[bottoms.length - 1];
+    return null;
+  }
+
+  function findProfileDetailsBandTop(profile) {
+    if (!profile) return null;
+    var el =
+      qs("profile-cruiser-stats-container", profile) ||
+      qs('[data-testid="profileCruiserFullStatsContainer"]', profile) ||
+      qs("profile-stats", profile) ||
+      qs("app-profile-place-and-time", profile) ||
+      qs('[class*="profile-section"]', profile) ||
+      qs('[data-testid="profileHeadlineTableContainer"]', profile);
+    if (!el) return null;
+    var r = el.getBoundingClientRect();
+    return r.top;
+  }
+
   function positionSidebar() {
     var side = document.getElementById(SIDEBAR_ID);
     if (!side || side.style.display === "none") return;
@@ -3868,29 +4097,29 @@
     var profile = findProfileHost();
     var bar = document.getElementById(BAR_ID);
     var barTop = bar ? bar.getBoundingClientRect().top : window.innerHeight - 48;
-    var sideH = side.offsetHeight || 250;
-    var minTop = Math.max(72, Math.round(window.innerHeight * 0.12));
+    var sideH = side.offsetHeight || 220;
+    var minTop = Math.max(64, Math.round(window.innerHeight * 0.1));
+    var maxTop = Math.round(barTop - sideH - 10);
 
-    // Sit just above where profile details / stats start (bottom of rail near that band)
-    var anchor =
-      (profile &&
-        (qs('[data-testid="profileHeadlineTableContainer"]', profile) ||
-          qs('[class*="profileName"], [class*="headline"], [class*="stats"]', profile))) ||
-      null;
+    var photoBottom = findProfilePhotoBandBottom(profile);
+    var detailsTop = findProfileDetailsBandTop(profile);
 
-    var detailsTop = null;
-    if (anchor) {
-      detailsTop = anchor.getBoundingClientRect().top;
+    var top;
+    if (photoBottom != null && detailsTop != null && detailsTop > photoBottom + 24) {
+      // Center in the gap between 3rd photo and profile details
+      var gapMid = (photoBottom + detailsTop) / 2;
+      top = Math.round(gapMid - sideH / 2);
+    } else if (photoBottom != null) {
+      top = Math.round(photoBottom + 10);
+    } else if (detailsTop != null) {
+      top = Math.round(detailsTop - sideH - 10);
     } else if (profile) {
       var pr = profile.getBoundingClientRect();
-      detailsTop = pr.top + pr.height * 0.72;
+      top = Math.round(pr.top + pr.height * 0.42 - sideH / 2);
     } else {
-      detailsTop = barTop - 92;
+      top = Math.round(window.innerHeight * 0.35);
     }
 
-    // Bottom of sidebar ~8px above details start; clamp so it never covers the bar
-    var top = Math.round(detailsTop - sideH - 8);
-    var maxTop = Math.round(barTop - sideH - 10);
     if (top > maxTop) top = maxTop;
     if (top < minTop) top = minTop;
 
@@ -3917,12 +4146,12 @@
 
   function ensureBar() {
     var bar = document.getElementById(BAR_ID);
-    if (bar && bar.getAttribute("data-ready") === "9") return bar;
+    if (bar && bar.getAttribute("data-ready") === "10") return bar;
 
     if (bar) bar.remove();
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.setAttribute("data-ready", "9");
+    bar.setAttribute("data-ready", "10");
     Object.assign(bar.style, {
       position: "fixed",
       bottom: "0",
@@ -4140,6 +4369,8 @@
     document.addEventListener("keydown", function (e) {
       if (e.key === "Escape") closeModals();
     });
+
+    installNativeDetailsInterceptor();
 
     tick();
     setTimeout(tick, 800);

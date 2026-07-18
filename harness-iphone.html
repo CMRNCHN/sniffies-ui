@@ -137,6 +137,7 @@
           <div class="profile-section"><div>STI Tested</div><div>Mar 28, 2026</div></div>
           <div class="profile-section"><div>Safeguards</div><div>DoxyPEP COVID Vaccinated</div></div>
           <div class="profile-rail">
+            <button aria-label="Block Cruiser" title="Block">B</button>
             <button aria-label="Report Cruiser" title="Report">S</button>
             <button aria-label="Pin for Later" title="Favorite">*</button>
             <button aria-label="Profile info" title="Info">i</button>
@@ -227,7 +228,7 @@
       log(assert(document.getElementById("sniffies-iphone-bar")?.dataset.view === "MAP", "bar shows MAP"));
       log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="chats"]'), "floating bar has Chats"));
       log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="map"]'), "floating bar has Map"));
-      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="favorites"]'), "floating bar has Favorites"));
+      log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="favorites"]'), "floating bar has Pinned (thumbtack)"));
       log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="back"]'), "floating bar has Back"));
       log(assert(!!document.querySelector('#sniffies-iphone-bar [data-cmd="settings"]'), "floating bar has Settings"));
       log(assert(!document.querySelector('#sniffies-iphone-bar [data-cmd="message"]'), "no Message on bottom bar"));
@@ -241,25 +242,34 @@
       log(assert(api.resolveViewState() === "CHATS_LIST", "CHATS_LIST via visible rows/tabs"));
       log(assert(document.getElementById("sniffies-iphone-sidebar")?.style.display === "none", "sidebar hidden on CHATS_LIST"));
 
+      // Thumbtack / favorites cmd opens Pinned tab
+      let pinnedTab = false;
+      const pinTab = document.querySelector('[data-testid="chatListTab-pinned"]');
+      if (pinTab) pinTab.addEventListener("click", () => { pinnedTab = true; }, { once: true });
+      document.querySelector('#sniffies-iphone-bar [data-cmd="favorites"]')?.click();
+      await wait(120);
+      log(assert(pinnedTab, "bar thumbtack opens Pinned chats tab"));
+
       sceneProfile();
       await wait(120);
       api.renderBar(api.resolveViewState());
       log(assert(api.resolveViewState() === "PROFILE", "PROFILE detected"));
       const side = document.getElementById("sniffies-iphone-sidebar");
       log(assert(!!side && side.style.display === "flex", "sidebar visible on PROFILE only"));
-      log(assert(!!side.querySelector('[data-cmd="details"]'), "sidebar has Details"));
+      log(assert(!side.querySelector('[data-cmd="details"]'), "sidebar has no Info icon"));
+      log(assert(!!side.querySelector('[data-cmd="pinned"]'), "sidebar has Pinned thumbtack"));
       log(assert(!!side.querySelector('[data-cmd="message"]'), "sidebar has Message"));
       log(assert(document.documentElement.classList.contains("sniffies-iphone-has-bar"), "profile inset class applied"));
 
-      // Details opens our sectioned sheet (not gallery / not flat word dump)
+      // Native Profile info → our sectioned sheet
       let nativePhotos = false;
       const photosBtn = document.querySelector('app-profile button[aria-label="Photos"]');
       if (photosBtn) photosBtn.addEventListener("click", () => { nativePhotos = true; }, { once: true });
-      side.querySelector('[data-cmd="details"]').click();
-      await wait(100);
+      document.querySelector('app-profile button[aria-label="Profile info"]')?.click();
+      await wait(120);
       const detailsSheet = document.getElementById("sniffies-iphone-profile-details");
       const sheetText = detailsSheet?.textContent || "";
-      log(assert(!!detailsSheet, "Details opens sectioned sheet"));
+      log(assert(!!detailsSheet, "native info opens our sectioned sheet"));
       log(assert(!nativePhotos, "Details does not open Photos/gallery"));
       log(assert(/HIV Status/i.test(sheetText), "details sheet has HIV Status section"));
       log(assert(/Into Public/i.test(sheetText), "details sheet has Into Public section"));
@@ -269,21 +279,13 @@
       log(assert(!!scraped?.sections?.length, "scrape returns labeled sections"));
       detailsSheet?.remove();
 
-      // Star → Pin for Later
-      let nativePin = false;
-      const pinBtn = document.querySelector('app-profile button[aria-label="Pin for Later"]');
-      if (pinBtn) pinBtn.addEventListener("click", () => { nativePin = true; }, { once: true });
-      side.querySelector('[data-cmd="favorites"]').click();
-      await wait(80);
-      log(assert(nativePin, "Star clicks Pin for Later"));
-
-      // Block → Report Cruiser
-      let nativeReport = false;
-      const reportBtn = document.querySelector('app-profile button[aria-label="Report Cruiser"]');
-      if (reportBtn) reportBtn.addEventListener("click", () => { nativeReport = true; }, { once: true });
+      // Block → Block Cruiser (not Report)
+      let nativeBlock = false;
+      const blockBtn = document.querySelector('app-profile button[aria-label="Block Cruiser"]');
+      if (blockBtn) blockBtn.addEventListener("click", () => { nativeBlock = true; }, { once: true });
       side.querySelector('[data-cmd="shield"]').click();
       await wait(80);
-      log(assert(nativeReport, "Block clicks Report Cruiser"));
+      log(assert(nativeBlock, "Block sidebar clicks Block Cruiser"));
 
       // Photos opens gallery control
       nativePhotos = false;
