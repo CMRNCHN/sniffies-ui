@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.9
+// @version      1.3.0
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.2.9";
+  var VERSION = "1.3.0";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -2471,19 +2471,23 @@
         var r = host.getBoundingClientRect();
         if (r.width < 2 || r.height < 2) continue;
         if (r.width > 100 || r.height > 100) continue;
-        // Must actually intersect the viewport (dump had markers at left:2700+)
-        if (r.right < 0 || r.left > vw || r.bottom < 0 || r.top > vh) continue;
-        if (r.left < 0 || r.right > vw + 4) continue;
 
         var testid = host.getAttribute("data-testid") || "";
         var label = railLabelFor(host);
-        // Known chat/profile header controls — always keep when on-screen
+        // Known chat/profile header controls — keep even when slightly above the fold
+        // (dump: pin/video at t:-40 under the status/photo chrome)
         var knownHeader =
           testid === "pinUserButton" ||
           testid === "startVideoCallButton" ||
-          /pin user|pin for later|report|block|message|photos?|fa-paper-plane|controls-icon/.test(
+          /pin user|pin for later|report|block|message|fa-paper-plane|controls-icon/.test(
             label
           );
+
+        // Must actually intersect the viewport (dump had markers at left:2700+)
+        // Allow known header controls a little above the top edge
+        var topSlack = knownHeader ? 72 : 0;
+        if (r.right < 0 || r.left > vw || r.bottom < -topSlack || r.top > vh) continue;
+        if (r.left < -4 || r.right > vw + 4) continue;
 
         var nearRightEdge = r.right > vw - 110 && r.left > vw * 0.55;
         var onProfileRight =
@@ -2494,6 +2498,8 @@
         if (!knownHeader && pr.height >= 40) {
           if (r.bottom < pr.top - 120 || r.top > pr.bottom + 40) continue;
         }
+        // Never treat NSFW fire badge as a rail action
+        if (testid === "nsfwIndicator" || /nsfw photos can only|fire-alt/.test(label)) continue;
 
         seen.push(host);
         items.push({
@@ -2750,16 +2756,30 @@
   }
 
   function isPhotoish(label) {
-    return /photo|pics?|media|album|gallery|image|camera|share photo|send photo/.test(
+    label = String(label || "").toLowerCase();
+    // Dump false positive: NSFW consent tooltip / fire badge is not a gallery opener
+    if (
+      /nsfwindicator|nsfw photos can only|depict yourself|consent|fire-alt|sniffiesicon-fire/.test(
+        label
+      )
+    ) {
+      return false;
+    }
+    if (/secondaryphotominiature|thumbprofileimage|sfwphotos|nsfwphotosgrouping/.test(label)) {
+      return false;
+    }
+    return /photo|pics?|media|album|gallery|image|camera|share photo|send photo|view profile photo/.test(
       label
     );
   }
 
   function isMessageish(label) {
     if (isPhotoish(label)) return false;
+    label = String(label || "").toLowerCase();
+    if (/nsfwindicator|liveplay|startvideocall|pin user|thumbtack/.test(label)) return false;
     return (
       /send message|message cruiser|start (a )?chat|private (chat|message)/.test(label) ||
-      (/\bmessage\b/.test(label) && !/missed|global|list|history/.test(label)) ||
+      (/\bmessage\b/.test(label) && !/missed|global|list|history|new messages/.test(label)) ||
       /\bpaper[\s-]?plane\b|\bpaperplane\b|\bairplane\b|\bdm\b|fa-paper-plane|fa-plane/.test(
         label
       )
@@ -2787,6 +2807,66 @@
     return true;
   }
 
+  /** Bring pin/video header row into view (dump often has them at t:-40). */
+  function revealProfileHeaderControls() {
+    var pin = qs('[data-testid="pinUserButton"]');
+    if (!pin) return;
+    try {
+      pin.scrollIntoView({ block: "center", behavior: "auto" });
+    } catch (e) {}
+    var node = pin.parentElement;
+    var hops = 0;
+    while (node && hops < 8) {
+      try {
+        if (node.scrollHeight > node.clientHeight + 24) {
+          node.scrollTop = Math.max(0, node.scrollTop - 80);
+        }
+      } catch (e2) {}
+      node = node.parentElement;
+      hops++;
+    }
+  }
+
+  /** Scroll the cruiser profile sheet so a below-the-fold Message CTA can mount. */
+  function scrollProfileSheetForMessage() {
+    var roots = qsa(
+      ".profile-scrollable, [id^='profile-'][class*='scroll'], #profile-container, app-profile"
+    );
+    for (var i = 0; i < roots.length; i++) {
+      var el = roots[i];
+      if (isOurUi(el)) continue;
+      try {
+        if (el.scrollHeight > el.clientHeight + 40) {
+          el.scrollTop = el.scrollHeight;
+        }
+      } catch (e) {}
+    }
+  }
+
+  /** Message control sitting next to Pin / LivePlay (not always labeled in dumps). */
+  function findMessageNearPinControls() {
+    var pin = qs('[data-testid="pinUserButton"]');
+    if (!pin) return null;
+    var row = pin.parentElement;
+    if (!row) return null;
+    var hosts = [row, row.parentElement].filter(Boolean);
+    for (var h = 0; h < hosts.length; h++) {
+      var buttons = qsa('button, [role="button"], a', hosts[h]);
+      for (var i = 0; i < buttons.length; i++) {
+        var b = buttons[i];
+        if (isOurUi(b) || b === pin) continue;
+        var tid = (b.getAttribute("data-testid") || "").toLowerCase();
+        if (tid === "pinuserbutton" || tid === "startvideocallbutton") continue;
+        if (isMessageish(railLabelFor(b))) return b;
+        // Paper-plane / comment icon in the same controls row as Pin
+        if (qs(".fa-paper-plane, .fa-plane, [class*='paper-plane'], [class*='paperPlane']", b)) {
+          return b;
+        }
+      }
+    }
+    return null;
+  }
+
   /**
    * Native profile "Message" / "Send message" CTA — including when it's below the
    * fold in the scrolled info sheet (sidebar used to miss it because of on-screen checks).
@@ -2802,7 +2882,9 @@
     function consider(el) {
       if (!el || seen.indexOf(el) !== -1) return;
       seen.push(el);
-      if (!isInProfileLayout(el, profile)) return;
+      var pin = qs('[data-testid="pinUserButton"]');
+      var nearPinRow = !!(pin && pin.parentElement && pin.parentElement.contains(el));
+      if (!nearPinRow && !isInProfileLayout(el, profile)) return;
 
       var aria = (el.getAttribute("aria-label") || "").trim().toLowerCase();
       var title = (el.getAttribute("title") || "").trim().toLowerCase();
@@ -2814,7 +2896,8 @@
       var blob = (aria + " " + title + " " + tid + " " + text + " " + railLabelFor(el))
         .toLowerCase()
         .replace(/\s+/g, " ");
-      if (/missed|global|list|history|new messages|check for missed/.test(blob)) return;
+      if (/missed|global|list|history|new messages|check for missed|liveplay|videocall/.test(blob))
+        return;
 
       var exactText = text === "message" || text === "send message" || text === "message cruiser";
       var exactAria = aria === "message" || aria === "send message" || title === "message";
@@ -2842,6 +2925,9 @@
         best = el;
       }
     }
+
+    var nearPin = findMessageNearPinControls();
+    if (nearPin) consider(nearPin);
 
     var selector =
       'button, [role="button"], a, [tabindex], [data-testid*="essage"], [data-testid*="Message"], [class*="message-button"], [class*="messageButton"]';
@@ -2875,8 +2961,14 @@
 
   /** Scroll the profile Message CTA into view, then click it (async-safe). */
   function activateNativeMessageControl(toast) {
+    revealProfileHeaderControls();
+    scrollProfileSheetForMessage();
+
     var el = findNativeMessageControl();
-    if (!el) return false;
+    if (!el) {
+      // One more pass after scroll settles (Angular often mounts Message late)
+      return false;
+    }
 
     function doClick() {
       return clickNative(el, toast || "Message");
@@ -2934,10 +3026,13 @@
       return el;
     }
 
-    // Prefer stable native testids from dumps
+    // Prefer stable native testids from dumps (pin may sit slightly above fold)
     var pinBtn = qs('[data-testid="pinUserButton"]');
-    if (pinBtn && isOnScreen(pinBtn, 12) && !isMapMarkerNoise(pinBtn)) {
-      out.pin = take(pinBtn);
+    if (pinBtn && !isMapMarkerNoise(pinBtn)) {
+      var pinR = pinBtn.getBoundingClientRect();
+      if (pinR.width >= 2 && pinR.bottom > -72 && pinR.top < (window.innerHeight || 1) + 40) {
+        out.pin = take(pinBtn);
+      }
     }
 
     for (i = 0; i < rail.length; i++) {
@@ -3130,8 +3225,36 @@
       qs('a[href="' + path + '"]') ||
       qs('a[href*="/profile/' + id + '/chat"]') ||
       qs('[routerlink*="/chat"]') ||
-      qs('[ng-reflect-router-link*="chat"]');
+      qs('[ng-reflect-router-link*="chat"]') ||
+      qs('[routerlink="/chat"]') ||
+      qs('[ng-reflect-router-link="/chat"]');
     if (link && !isOurUi(link) && clickNative(link, toast || "Message")) return true;
+
+    // Dump often has no Message node — inject a same-origin <a> inside app-root
+    // so Angular's router can intercept the click (still not location.assign).
+    try {
+      var root = qs("app-root") || document.body;
+      var a = document.createElement("a");
+      a.href = path;
+      a.setAttribute("data-sniffies-iphone-chat-bridge", "1");
+      Object.assign(a.style, {
+        position: "fixed",
+        left: "-9999px",
+        top: "0",
+        width: "1px",
+        height: "1px",
+        opacity: "0"
+      });
+      a.textContent = "Message";
+      root.appendChild(a);
+      var ok = clickNative(a, toast || "Message");
+      setTimeout(function () {
+        try {
+          a.remove();
+        } catch (e) {}
+      }, 800);
+      if (ok) return true;
+    } catch (e2) {}
     return false;
   }
 
@@ -3144,8 +3267,13 @@
         return;
       }
       // Retry the native CTA once — do NOT hard-navigate (map flash)
-      if (tries === 4) activateNativeMessageControl(null);
-      if (tries < 10) setTimeout(tick, 200);
+      if (tries === 3) {
+        revealProfileHeaderControls();
+        scrollProfileSheetForMessage();
+      }
+      if (tries === 5) activateNativeMessageControl(null);
+      if (tries === 7) tryOpenProfileChatRoute(null);
+      if (tries < 12) setTimeout(tick, 200);
     }
     setTimeout(tick, 220);
   }
@@ -3160,35 +3288,50 @@
 
     var profile = findProfileHost();
     if (profile) {
+      revealProfileHeaderControls();
+
       // 1) Native text Message CTA (scroll into view if below the fold)
       if (activateNativeMessageControl("Message")) {
         ensureOpenedChat("Type your message");
         return;
       }
 
-      // 2) Labeled rail Message only
-      var rail = classifyProfileRail();
-      if (
-        rail.message &&
-        isMessageish(railLabelFor(rail.message)) &&
-        clickNative(rail.message, "Message")
-      ) {
-        ensureOpenedChat("Type your message");
-        return;
-      }
+      // 2) Delayed remount — Message often appears after scrolling the sheet
+      scrollProfileSheetForMessage();
+      setTimeout(function () {
+        if (isProfileChatPath() || isChatThreadOpen()) {
+          focusChatComposer("Type your message");
+          return;
+        }
+        if (activateNativeMessageControl("Message")) {
+          ensureOpenedChat("Type your message");
+          return;
+        }
 
-      // 3) In-app router link only (no location.assign)
-      if (tryOpenProfileChatRoute("Message")) {
-        ensureOpenedChat("Type your message");
-        return;
-      }
+        // 3) Labeled rail Message only
+        var rail = classifyProfileRail();
+        if (
+          rail.message &&
+          isMessageish(railLabelFor(rail.message)) &&
+          clickNative(rail.message, "Message")
+        ) {
+          ensureOpenedChat("Type your message");
+          return;
+        }
 
-      // 4) Compose-on-profile already open
-      if (focusChatComposer("Type your message")) return;
+        // 4) In-app router link / injected bridge (no location.assign)
+        if (tryOpenProfileChatRoute("Message")) {
+          ensureOpenedChat("Type your message");
+          return;
+        }
 
-      dumpProfileDebug().then(function () {
-        showToast("Message not found — dump copied", "error");
-      });
+        // 5) Compose-on-profile already open
+        if (focusChatComposer("Type your message")) return;
+
+        dumpProfileDebug().then(function () {
+          showToast("Message not found — dump copied", "error");
+        });
+      }, 180);
       return;
     }
 
@@ -3340,11 +3483,31 @@
   }
 
   function cmdProfilePics() {
-    // Temporary: open their gallery. Send-pics flow TBD.
+    // Open their profile photo / secondary gallery — never the NSFW fire badge
+    var targets = [
+      qs('[data-testid="userProfileImage"]'),
+      qs('[data-testid="secondaryPhotoMiniature-0"] .profile-photo-thumb'),
+      qs('[data-testid="secondaryPhotoMiniature-0"]'),
+      qs("#profile-image"),
+      qs('[aria-label="View Profile Photo"]')
+    ];
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      if (!t || isOurUi(t)) continue;
+      var tid = (t.getAttribute("data-testid") || "").toLowerCase();
+      if (tid === "nsfwindicator") continue;
+      if (clickNative(t, "Photos")) return;
+    }
     var rail = classifyProfileRail();
-    if (clickNative(rail.photos, "Photos")) return;
+    if (
+      rail.photos &&
+      (rail.photos.getAttribute("data-testid") || "").toLowerCase() !== "nsfwindicator" &&
+      clickNative(rail.photos, "Photos")
+    ) {
+      return;
+    }
     if (clickNativeUnderSidebar("pics", "Photos")) return;
-    showToast("Photos — send from chat coming next", "error");
+    showToast("Couldn't open their photos", "error");
   }
 
   function findBlockControl() {
