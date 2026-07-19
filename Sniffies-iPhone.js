@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.4
+// @version      1.2.8
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.2.4";
+  var VERSION = "1.2.8";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -31,6 +31,163 @@
   var MAX_QUICK_MESSAGES = 30;
   var MAX_QM_LABEL = 40;
   var MAX_QM_TEXT = 500;
+  var MAX_AI_NOTES = 600;
+  var MAX_AI_SUGGESTIONS = 6;
+  var SEND_PICS_COUNT = 6;
+  var sendingPics = false;
+  var nativePhotosOpen = false;
+
+  /**
+   * Tap-to-add vibe / logistics chips for Sniffies chats.
+   * tag = stored in notes · reply = chat-ready expansion shown as a suggestion.
+   */
+  var VIBE_LOGISTICS_CATALOG = [
+    {
+      cat: "Role",
+      items: [
+        { tag: "vers", reply: "Vers here." },
+        { tag: "top", reply: "Top here." },
+        { tag: "bottom", reply: "Bottom here." },
+        { tag: "vers top", reply: "Vers top." },
+        { tag: "vers bttm", reply: "Vers bottom." },
+        { tag: "oral", reply: "Oral-focused." },
+        { tag: "side", reply: "Side — no anal." },
+        { tag: "versatile", reply: "Versatile / open." }
+      ]
+    },
+    {
+      cat: "Place",
+      items: [
+        { tag: "can host", reply: "I can host." },
+        { tag: "can't host", reply: "Can't host — you?" },
+        { tag: "travel", reply: "I can travel." },
+        { tag: "carplay", reply: "Carplay works." },
+        { tag: "hotel", reply: "Hotel — you nearby?" },
+        { tag: "nearby only", reply: "Nearby only." },
+        { tag: "private place", reply: "I've got a private spot." },
+        { tag: "hosting now", reply: "Hosting now." }
+      ]
+    },
+    {
+      cat: "Pics",
+      items: [
+        { tag: "no face first", reply: "No face pics first." },
+        { tag: "face ok", reply: "Face is fine." },
+        { tag: "trade pics", reply: "Wanna trade pics?" },
+        { tag: "more pics", reply: "Got more pics?" },
+        { tag: "stats in pics", reply: "Stats are in my pics." },
+        { tag: "live pic", reply: "Send a live one?" },
+        { tag: "body pics", reply: "Body pics?" }
+      ]
+    },
+    {
+      cat: "Timing",
+      items: [
+        { tag: "free now", reply: "Free now." },
+        { tag: "tonight", reply: "Tonight work?" },
+        { tag: "after 10", reply: "Free after 10." },
+        { tag: "quick", reply: "Looking for something quick." },
+        { tag: "weekends", reply: "Mostly weekends." },
+        { tag: "late night", reply: "Late night works." },
+        { tag: "soon", reply: "Can do soon." },
+        { tag: "short window", reply: "I've got a short window." }
+      ]
+    },
+    {
+      cat: "Vibe",
+      items: [
+        { tag: "discreet", reply: "Discreet here." },
+        { tag: "NSA", reply: "NSA." },
+        { tag: "chill", reply: "Chill vibe." },
+        { tag: "masc", reply: "Masc here." },
+        { tag: "hairy", reply: "Hairy here." },
+        { tag: "smooth", reply: "Smooth here." },
+        { tag: "jock", reply: "Jock vibe." },
+        { tag: "daddy", reply: "Daddy type." },
+        { tag: "twink", reply: "Twink here." },
+        { tag: "hung", reply: "Hung." }
+      ]
+    },
+    {
+      cat: "Looking",
+      items: [
+        { tag: "looking now", reply: "Looking now." },
+        { tag: "hosting", reply: "Hosting — come through?" },
+        { tag: "cruising", reply: "Cruising nearby." },
+        { tag: "JO", reply: "JO?" },
+        { tag: "fuck", reply: "Looking to fuck." },
+        { tag: "head", reply: "Looking for head." },
+        { tag: "make out", reply: "Make out / more?" },
+        { tag: "recurring", reply: "Open to recurring." }
+      ]
+    },
+    {
+      cat: "Boundaries",
+      items: [
+        { tag: "safe only", reply: "Safe only." },
+        { tag: "no rush", reply: "No rush." },
+        { tag: "ask first", reply: "Ask before anything." },
+        { tag: "condoms", reply: "Condoms." },
+        { tag: "DDF", reply: "DDF." },
+        { tag: "on PrEP", reply: "On PrEP." },
+        { tag: "no drugs", reply: "No drugs." },
+        { tag: "sober", reply: "Sober meet." }
+      ]
+    }
+  ];
+
+  /** Sniffies-scene reply personalities (cruising / map chat). */
+  var AI_PERSONALITIES = {
+    cruiser: {
+      id: "cruiser",
+      label: "Cruiser",
+      blurb: "Map-native — short, confident, scene-aware.",
+      prompt:
+        "Write short Sniffies chat replies for gay cruising / hookups on a map app. Sound like someone already on the map: brief, confident, logistics-aware (host / travel / now). No essays, no corporate tone, no moralizing."
+    },
+    direct: {
+      id: "direct",
+      label: "Direct",
+      blurb: "Straight to intent and logistics.",
+      prompt:
+        "Write very direct Sniffies replies. Ask what you need (pics, place, timing, role) in one short line. No small talk padding."
+    },
+    chill: {
+      id: "chill",
+      label: "Chill",
+      blurb: "Low-pressure, casual, easygoing.",
+      prompt:
+        "Write chill, low-pressure Sniffies replies. Friendly and casual, never pushy. Keep it short and easy to answer."
+    },
+    flirty: {
+      id: "flirty",
+      label: "Flirty",
+      blurb: "Playful tease — still short.",
+      prompt:
+        "Write flirty, playful Sniffies replies with light tease. Keep it hot but short; still move toward pics / meet / now when it fits."
+    },
+    discreet: {
+      id: "discreet",
+      label: "Discreet",
+      blurb: "Privacy-first, careful wording.",
+      prompt:
+        "Write discreet Sniffies replies. Privacy-first, careful wording, no explicit detail in openers. Confirm discretion, timing, and place carefully."
+    },
+    host: {
+      id: "host",
+      label: "Host",
+      blurb: "Place / hosting logistics first.",
+      prompt:
+        "Write Sniffies replies focused on hosting and place logistics — can you host, when, how far, clean/private. Keep it short and practical."
+    },
+    custom: {
+      id: "custom",
+      label: "Custom",
+      blurb: "Uses your notes as the vibe guide.",
+      prompt:
+        "Write short Sniffies cruising-chat replies. Follow the user's custom personality notes closely while staying brief and chat-native."
+    }
+  };
   var INSET_STYLE_ID = "sniffies-iphone-inset";
 
   var BAR_ID = "sniffies-iphone-bar";
@@ -90,7 +247,9 @@
       { id: "5", label: "Looking", text: "Where at?" }
     ],
     aiEnabled: true,
-    aiEndpoint: ""
+    aiEndpoint: "",
+    aiPersonality: "cruiser",
+    aiNotes: ""
   };
 
   var THEME = {
@@ -188,12 +347,48 @@
     }
   }
 
+  function sanitizeAiPersonality(id) {
+    var key = stripControls(id).trim().toLowerCase();
+    return AI_PERSONALITIES[key] ? key : DEFAULTS.aiPersonality;
+  }
+
+  function sanitizeAiNotes(notes) {
+    return stripControls(notes).trim().slice(0, MAX_AI_NOTES);
+  }
+
+  function getAiPersonality() {
+    var state = loadState();
+    var id = sanitizeAiPersonality(state.aiPersonality);
+    var base = AI_PERSONALITIES[id] || AI_PERSONALITIES.cruiser;
+    var notes = sanitizeAiNotes(state.aiNotes);
+    var prompt = base.prompt;
+    if (notes) {
+      prompt +=
+        " User notes (treat as my vibe / boundaries / logistics): " + notes;
+    }
+    return {
+      id: base.id,
+      label: base.label,
+      blurb: base.blurb,
+      prompt: prompt,
+      notes: notes
+    };
+  }
+
   function normalizeState(parsed) {
     if (!parsed || typeof parsed !== "object") parsed = {};
     parsed.quickMessages = sanitizeQuickMessages(parsed.quickMessages);
     if (typeof parsed.aiEnabled !== "boolean") parsed.aiEnabled = DEFAULTS.aiEnabled;
     parsed.aiEndpoint = sanitizeAiEndpoint(
       typeof parsed.aiEndpoint === "string" ? parsed.aiEndpoint : DEFAULTS.aiEndpoint
+    );
+    parsed.aiPersonality = sanitizeAiPersonality(
+      typeof parsed.aiPersonality === "string"
+        ? parsed.aiPersonality
+        : DEFAULTS.aiPersonality
+    );
+    parsed.aiNotes = sanitizeAiNotes(
+      typeof parsed.aiNotes === "string" ? parsed.aiNotes : DEFAULTS.aiNotes
     );
     return parsed;
   }
@@ -644,13 +839,6 @@
       scrollbarWidth: "none"
     });
     return row;
-  }
-
-  /** Dot / number marks for the short chat dock (full label stays in title). */
-  function markGlyphForIndex(idx) {
-    var n = (idx % 5) + 1;
-    // Sets of mid-dots — denser than words, still countable
-    return Array(n + 1).join("·");
   }
 
   function makeMarkChip(opts) {
@@ -1119,49 +1307,434 @@
     return texts.slice(-8);
   }
 
+  /** Reply banks tuned to Sniffies chat intents × personality. */
+  function sniffiesReplyBank(personalityId) {
+    var banks = {
+      cruiser: {
+        open: [
+          { label: "Sup", text: "Sup — you free?" },
+          { label: "Wyd", text: "Wyd rn?" },
+          { label: "Into", text: "What you into?" },
+          { label: "Pics", text: "Got more pics?" }
+        ],
+        pics: [
+          { label: "Trade", text: "Wanna trade?" },
+          { label: "Send", text: "Sending now." },
+          { label: "More", text: "Got a couple more?" }
+        ],
+        place: [
+          { label: "Near", text: "I'm close — you host or travel?" },
+          { label: "Host", text: "I can host." },
+          { label: "Come", text: "Come through?" }
+        ],
+        now: [
+          { label: "Now", text: "Free now — you?" },
+          { label: "Lookin", text: "Looking for fun." },
+          { label: "Soon", text: "Can do soon." }
+        ],
+        into: [
+          { label: "Vers", text: "Vers, open-minded." },
+          { label: "Same", text: "Same — what you looking for?" },
+          { label: "Down", text: "I'm down if the vibe's right." }
+        ],
+        filler: [
+          { label: "Nice", text: "Nice." },
+          { label: "Where", text: "Where you at?" },
+          { label: "Bet", text: "Bet." }
+        ]
+      },
+      direct: {
+        open: [
+          { label: "Free?", text: "You free now?" },
+          { label: "Host?", text: "Host or travel?" },
+          { label: "Pics", text: "Send pics." },
+          { label: "Into", text: "What are you looking for?" }
+        ],
+        pics: [
+          { label: "Trade", text: "Trade now." },
+          { label: "Face", text: "Face too?" },
+          { label: "More", text: "Need clearer pics." }
+        ],
+        place: [
+          { label: "Where", text: "Where exactly?" },
+          { label: "Host", text: "I host — how far?" },
+          { label: "Travel", text: "I can travel if you're close." }
+        ],
+        now: [
+          { label: "Now", text: "Available now." },
+          { label: "ETA", text: "How soon can you meet?" },
+          { label: "Window", text: "I've got a short window." }
+        ],
+        into: [
+          { label: "Top", text: "Top here." },
+          { label: "Bttm", text: "Bottom here." },
+          { label: "Role", text: "What's your role?" }
+        ],
+        filler: [
+          { label: "Ok", text: "Ok." },
+          { label: "Where", text: "Location?" },
+          { label: "Yes", text: "Yes." }
+        ]
+      },
+      chill: {
+        open: [
+          { label: "Hey", text: "Hey, how's it going?" },
+          { label: "Wyd", text: "Wyd tonight?" },
+          { label: "Vibe", text: "You looking to hang?" },
+          { label: "Pics", text: "Mind sharing a couple pics?" }
+        ],
+        pics: [
+          { label: "Sure", text: "Sure, I can send some." },
+          { label: "Trade", text: "Happy to trade if you want." },
+          { label: "Cool", text: "These look good." }
+        ],
+        place: [
+          { label: "Near", text: "I'm around — you nearby too?" },
+          { label: "Host", text: "I can host if that helps." },
+          { label: "Easy", text: "Whatever's easiest for you." }
+        ],
+        now: [
+          { label: "Free", text: "Pretty free if you are." },
+          { label: "Later", text: "Later works too." },
+          { label: "Chill", text: "Just chilling — open to plans." }
+        ],
+        into: [
+          { label: "Open", text: "Pretty open-minded." },
+          { label: "Same", text: "Same here — what are you into?" },
+          { label: "See", text: "We can see if the vibe matches." }
+        ],
+        filler: [
+          { label: "Nice", text: "Nice." },
+          { label: "Cool", text: "Cool." },
+          { label: "Where", text: "Where abouts are you?" }
+        ]
+      },
+      flirty: {
+        open: [
+          { label: "Hey", text: "Hey you — looking good." },
+          { label: "Into", text: "What are you craving?" },
+          { label: "Pics", text: "Got anything hotter?" },
+          { label: "Now", text: "You free to play?" }
+        ],
+        pics: [
+          { label: "Hot", text: "Fuck, that's hot." },
+          { label: "More", text: "Don't stop there…" },
+          { label: "Trade", text: "I'll trade you something good." }
+        ],
+        place: [
+          { label: "Come", text: "Come keep me company?" },
+          { label: "Host", text: "I can host — door's open." },
+          { label: "Close", text: "You're close… tempting." }
+        ],
+        now: [
+          { label: "Now", text: "I'm free and thinking about you." },
+          { label: "Soon", text: "Sooner the better." },
+          { label: "Tonight", text: "Tonight could get fun." }
+        ],
+        into: [
+          { label: "Vers", text: "Vers and curious — surprise me." },
+          { label: "Into", text: "Tell me what you want." },
+          { label: "Same", text: "I'm into that." }
+        ],
+        filler: [
+          { label: "Mmm", text: "Mmm." },
+          { label: "Yeah?", text: "Yeah?" },
+          { label: "Where", text: "Where should I find you?" }
+        ]
+      },
+      discreet: {
+        open: [
+          { label: "Hey", text: "Hey — discreet here." },
+          { label: "Free", text: "You free for something private?" },
+          { label: "Vibe", text: "Looking for low-key." },
+          { label: "Chat", text: "Can chat if you're chill / discreet." }
+        ],
+        pics: [
+          { label: "Private", text: "Can share privately." },
+          { label: "Trade", text: "Trade if you stay discreet." },
+          { label: "Blur", text: "Prefer no face first." }
+        ],
+        place: [
+          { label: "Private", text: "Need somewhere private." },
+          { label: "Host", text: "I can host discreetly." },
+          { label: "Near", text: "Nearby and low-key?" }
+        ],
+        now: [
+          { label: "Window", text: "I have a private window." },
+          { label: "Soon", text: "Can do soon if quiet." },
+          { label: "Later", text: "Later tonight works better." }
+        ],
+        into: [
+          { label: "NSA", text: "NSA, discreet." },
+          { label: "Same", text: "Same — keep it between us." },
+          { label: "Simple", text: "Keeping it simple / private." }
+        ],
+        filler: [
+          { label: "Ok", text: "Ok." },
+          { label: "Understood", text: "Understood." },
+          { label: "Where", text: "Rough area?" }
+        ]
+      },
+      host: {
+        open: [
+          { label: "Host", text: "I can host — you travel?" },
+          { label: "Free", text: "Place is free now." },
+          { label: "Near", text: "How far are you?" },
+          { label: "Pics", text: "Pics + ETA?" }
+        ],
+        pics: [
+          { label: "Trade", text: "Trade, then come through." },
+          { label: "Ok", text: "Pics work — when can you get here?" },
+          { label: "More", text: "One more clear pic?" }
+        ],
+        place: [
+          { label: "Host", text: "I host — private place." },
+          { label: "Address", text: "I'll share the spot if you're coming." },
+          { label: "Park", text: "Easy parking / drop-by." }
+        ],
+        now: [
+          { label: "Now", text: "Place is ready now." },
+          { label: "ETA", text: "What's your ETA?" },
+          { label: "Hour", text: "Free for the next hour." }
+        ],
+        into: [
+          { label: "Host", text: "Hosting — what are you looking for?" },
+          { label: "Vers", text: "Vers host here." },
+          { label: "Open", text: "Open if you can travel." }
+        ],
+        filler: [
+          { label: "Come", text: "Come through." },
+          { label: "Where", text: "You nearby?" },
+          { label: "Ok", text: "Ok — heading here?" }
+        ]
+      },
+      custom: {
+        open: [
+          { label: "Hey", text: "Hey — you free?" },
+          { label: "Wyd", text: "Wyd?" },
+          { label: "Into", text: "What are you into?" },
+          { label: "Pics", text: "Pics?" }
+        ],
+        pics: [
+          { label: "Trade", text: "Trade?" },
+          { label: "Sure", text: "Sure." },
+          { label: "More", text: "More?" }
+        ],
+        place: [
+          { label: "Host", text: "Host or travel?" },
+          { label: "Near", text: "You nearby?" },
+          { label: "Where", text: "Where at?" }
+        ],
+        now: [
+          { label: "Now", text: "Free now?" },
+          { label: "Soon", text: "Soon work?" },
+          { label: "Tonight", text: "Tonight?" }
+        ],
+        into: [
+          { label: "Into", text: "What are you looking for?" },
+          { label: "Same", text: "Same." },
+          { label: "Down", text: "I'm down." }
+        ],
+        filler: [
+          { label: "Ok", text: "Ok." },
+          { label: "Nice", text: "Nice." },
+          { label: "Where", text: "Where?" }
+        ]
+      }
+    };
+    return banks[personalityId] || banks.cruiser;
+  }
+
+  function vibeCatalogFlat() {
+    var out = [];
+    for (var c = 0; c < VIBE_LOGISTICS_CATALOG.length; c++) {
+      var cat = VIBE_LOGISTICS_CATALOG[c];
+      for (var i = 0; i < cat.items.length; i++) {
+        out.push({
+          cat: cat.cat,
+          tag: cat.items[i].tag,
+          reply: cat.items[i].reply,
+          key: String(cat.items[i].tag || "")
+            .toLowerCase()
+            .replace(/\s+/g, " ")
+            .trim()
+        });
+      }
+    }
+    return out;
+  }
+
+  function splitVibeNoteTokens(notes) {
+    if (!notes) return [];
+    return String(notes)
+      .split(/\n+|·|\||,|;|\/+/)
+      .map(function (line) {
+        return stripControls(line).trim().replace(/\s+/g, " ");
+      })
+      .filter(function (line) {
+        return line.length >= 2 && line.length <= 140;
+      });
+  }
+
+  function findVibeItemByTag(tag) {
+    var key = String(tag || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!key) return null;
+    var flat = vibeCatalogFlat();
+    for (var i = 0; i < flat.length; i++) {
+      if (flat[i].key === key) return flat[i];
+    }
+    // Soft match: token contains catalog tag or vice versa
+    for (var j = 0; j < flat.length; j++) {
+      if (key.indexOf(flat[j].key) !== -1 || flat[j].key.indexOf(key) !== -1) {
+        return flat[j];
+      }
+    }
+    return null;
+  }
+
+  /** Expand user notes into chat-ready vibe/logistics suggestion chips. */
+  function notesAsSuggestionLines(notes) {
+    var tokens = splitVibeNoteTokens(notes);
+    var out = [];
+    var seen = {};
+    for (var i = 0; i < tokens.length && out.length < 8; i++) {
+      var token = tokens[i];
+      var hit = findVibeItemByTag(token);
+      var text = hit ? hit.reply : token;
+      var label = hit ? hit.tag : token.slice(0, 14);
+      var key = text.toLowerCase();
+      if (seen[key]) continue;
+      seen[key] = true;
+      out.push({ label: label.slice(0, MAX_QM_LABEL), text: text, cat: hit ? hit.cat : "Notes" });
+    }
+    return out;
+  }
+
+  function parseNotesVibeTags(notes) {
+    return splitVibeNoteTokens(notes)
+      .map(function (t) {
+        var hit = findVibeItemByTag(t);
+        return hit ? hit.tag : t;
+      })
+      .slice(0, 24);
+  }
+
+  /** Context-aware vibe/logistics lines beyond the personality bank. */
+  function contextVibeSuggestions(lastMessage) {
+    var last = String(lastMessage || "").toLowerCase();
+    var wantCats = [];
+    if (!last) {
+      wantCats = ["Looking", "Timing", "Role", "Place"];
+    } else {
+      if (/pic|photo|face|body|snap|nudes?/i.test(last)) wantCats.push("Pics", "Boundaries");
+      if (/where|locat|area|near|hotel|host|place|travel|come|address|car/i.test(last)) {
+        wantCats.push("Place", "Timing");
+      }
+      if (/wyd|up to|doing|free|now|tonight|soon|available|meet|window/i.test(last)) {
+        wantCats.push("Timing", "Looking");
+      }
+      if (/into|like|down for|want|role|top|bottom|vers|looking|jo|fuck|head/i.test(last)) {
+        wantCats.push("Role", "Looking", "Vibe");
+      }
+      if (/discreet|safe|condo|prep|ddf|drug|sober/i.test(last)) wantCats.push("Boundaries", "Vibe");
+      if (!wantCats.length) wantCats = ["Vibe", "Looking", "Timing"];
+    }
+
+    var out = [];
+    var seen = {};
+    for (var c = 0; c < VIBE_LOGISTICS_CATALOG.length; c++) {
+      var block = VIBE_LOGISTICS_CATALOG[c];
+      if (wantCats.indexOf(block.cat) === -1) continue;
+      for (var i = 0; i < block.items.length; i++) {
+        var item = block.items[i];
+        var key = item.reply.toLowerCase();
+        if (seen[key]) continue;
+        seen[key] = true;
+        out.push({
+          label: item.tag.slice(0, MAX_QM_LABEL),
+          text: item.reply,
+          cat: block.cat
+        });
+      }
+    }
+    return out;
+  }
+
+  function notesContainTag(notes, tag) {
+    var key = String(tag || "")
+      .toLowerCase()
+      .trim();
+    if (!key || !notes) return false;
+    var tokens = splitVibeNoteTokens(notes).map(function (t) {
+      return t.toLowerCase();
+    });
+    if (tokens.indexOf(key) !== -1) return true;
+    return (" · " + notes.toLowerCase() + " · ").indexOf(" · " + key + " · ") !== -1;
+  }
+
+  function toggleVibeNoteTag(notes, tag) {
+    var cleanTag = stripControls(tag).trim().replace(/\s+/g, " ");
+    if (!cleanTag) return sanitizeAiNotes(notes);
+    var tokens = splitVibeNoteTokens(notes);
+    var lower = cleanTag.toLowerCase();
+    var next = [];
+    var removed = false;
+    for (var i = 0; i < tokens.length; i++) {
+      if (tokens[i].toLowerCase() === lower) {
+        removed = true;
+        continue;
+      }
+      next.push(tokens[i]);
+    }
+    if (!removed) next.push(cleanTag);
+    return sanitizeAiNotes(next.join(" · "));
+  }
+
   function localAiSuggestions(recent) {
+    var personality = getAiPersonality();
+    var bank = sniffiesReplyBank(personality.id);
     var last = (recent[recent.length - 1] || "").toLowerCase();
     var out = [];
 
-    function add(label, text) {
-      if (out.length >= 4) return;
-      for (var i = 0; i < out.length; i++) if (out[i].text === text) return;
-      out.push({ label: label, text: text });
+    function add(item) {
+      if (!item || !item.text || out.length >= MAX_AI_SUGGESTIONS) return;
+      for (var i = 0; i < out.length; i++) if (out[i].text === item.text) return;
+      out.push({
+        label: (item.label || item.text).slice(0, MAX_QM_LABEL),
+        text: item.text
+      });
     }
+
+    // 1) User vibe/logistics notes (expanded to chat-ready lines)
+    notesAsSuggestionLines(personality.notes).forEach(add);
+
+    // 2) Context vibe/logistics from catalog
+    contextVibeSuggestions(last).forEach(add);
 
     if (!last) {
-      add("Hey", "Hey, what's up?");
-      add("Wyd", "Wyd rn?");
-      add("Into", "What are you into?");
-      add("Pics", "Got any pics?");
-      return out;
+      (bank.open || []).forEach(add);
+      return out.slice(0, MAX_AI_SUGGESTIONS);
     }
 
-    if (/pic|photo|face|body|snap/i.test(last)) {
-      add("Sure", "Sure, sending now.");
-      add("You first", "You first?");
-      add("Trade", "Wanna trade?");
+    if (/pic|photo|face|body|snap|nudes?/i.test(last)) {
+      (bank.pics || []).forEach(add);
     }
-    if (/where|locat|area|near|hotel|host|place/i.test(last)) {
-      add("Nearby", "I'm nearby — you?");
-      add("Host", "I can host.");
-      add("Come thru", "Want to come through?");
+    if (/where|locat|area|near|hotel|host|place|travel|come|address/i.test(last)) {
+      (bank.place || []).forEach(add);
     }
-    if (/wyd|up to|doing|free|now|tonight/i.test(last)) {
-      add("Free", "Free now, you?");
-      add("Looking", "Looking for fun.");
-      add("Chill", "Just chilling, bored.");
+    if (/wyd|up to|doing|free|now|tonight|soon|available|meet/i.test(last)) {
+      (bank.now || []).forEach(add);
     }
-    if (/into|like|down for|want/i.test(last)) {
-      add("Vers", "Vers here, open-minded.");
-      add("Top", "Top here.");
-      add("Same", "Same — what are you looking for?");
+    if (/into|like|down for|want|role|top|bottom|vers|looking/i.test(last)) {
+      (bank.into || []).forEach(add);
     }
 
-    add("Nice", "Nice.");
-    add("Sounds good", "Sounds good.");
-    add("Where", "Where you at?");
-    return out.slice(0, 4);
+    (bank.filler || []).forEach(add);
+    (bank.open || []).forEach(add);
+    return out.slice(0, MAX_AI_SUGGESTIONS);
   }
 
   function refreshAiSuggestions(done) {
@@ -1175,6 +1748,7 @@
     var recent = getRecentChatTexts();
     var local = localAiSuggestions(recent);
     var endpoint = sanitizeAiEndpoint(state.aiEndpoint);
+    var personality = getAiPersonality();
 
     if (!endpoint) {
       aiSuggestionsCache = local;
@@ -1187,8 +1761,24 @@
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        context: "sniffies",
+        scene: "cruising-chat",
         recentMessages: recent,
-        quickMessages: loadQuickMessages()
+        quickMessages: loadQuickMessages(),
+        personality: {
+          id: personality.id,
+          label: personality.label,
+          prompt: personality.prompt,
+          notes: personality.notes
+        },
+        vibeTags: parseNotesVibeTags(personality.notes),
+        vibeLines: notesAsSuggestionLines(personality.notes),
+        logistics: contextVibeSuggestions(recent[recent.length - 1] || "").slice(0, 12),
+        instructions:
+          "Return 4-6 short reply suggestions as JSON { suggestions: [{ label, text }] }. " +
+          "Replies must fit Sniffies gay cruising / map-hookup chat: brief, chatty, logistics-aware. " +
+          "Prefer the user's vibeTags / vibeLines (role, host/travel, pics rules, timing, boundaries). " +
+          "Match the personality prompt and notes."
       })
     })
       .then(function (r) {
@@ -1215,7 +1805,7 @@
             .filter(function (s) {
               return s.text;
             })
-            .slice(0, 4);
+            .slice(0, MAX_AI_SUGGESTIONS);
         } else {
           aiSuggestionsCache = local;
         }
@@ -3354,20 +3944,233 @@
     }
   }
 
-  function cmdPics() {
+  function getAddMediaControl() {
     var media = qs(SEL.addMedia);
-    if (media && isVisible(media)) {
-      media.click();
-      return;
+    if (media && (isVisible(media) || media.offsetParent || media.getBoundingClientRect().width > 0)) {
+      return media.closest("button, [role='button'], a") || media;
     }
+    var plus = qs("i.fa.fa-plus, i.fa-plus, .fa-plus");
+    if (plus) return plus.closest("button, [role='button'], a") || plus;
+    var labeled = qsa('button, [role="button"], a');
+    for (var i = 0; i < labeled.length; i++) {
+      if (isOurUi(labeled[i])) continue;
+      var L = (
+        (labeled[i].getAttribute("aria-label") || "") +
+        " " +
+        (labeled[i].getAttribute("data-testid") || "")
+      ).toLowerCase();
+      if (/add media|add photo|attach|camera|gallery/.test(L)) return labeled[i];
+    }
+    return null;
+  }
+
+  function getSavedPhotoContainers() {
+    return qsa(
+      '.saved-image-container[aria-label="Select This Photo"], .saved-image-container[aria-label*="Select This Photo"], .saved-image-container'
+    ).filter(function (el) {
+      if (isOurUi(el)) return false;
+      var img = qs(".hidden-img, img", el);
+      if (!img) return false;
+      var src = img.getAttribute("src") || img.currentSrc || "";
+      if (!src || src.indexOf("data:") === 0) return false;
+      var r = el.getBoundingClientRect();
+      return r.width > 8 && r.height > 8;
+    });
+  }
+
+  function collectSavedPhotoSrcs(limit) {
+    limit = limit || SEND_PICS_COUNT;
+    var srcs = [];
+    var seen = {};
+    var containers = getSavedPhotoContainers();
+    for (var i = 0; i < containers.length && srcs.length < limit; i++) {
+      var img = qs(".hidden-img, img", containers[i]);
+      var src = img && (img.getAttribute("src") || img.currentSrc || "");
+      if (!src || seen[src]) continue;
+      seen[src] = true;
+      srcs.push(src);
+    }
+    return srcs;
+  }
+
+  function findSavedPhotoBySrc(src) {
+    if (!src) return null;
+    var imgs = qsa(".hidden-img, .saved-image-container img");
+    for (var i = 0; i < imgs.length; i++) {
+      var s = imgs[i].getAttribute("src") || imgs[i].currentSrc || "";
+      if (s === src) {
+        return (
+          imgs[i].closest(".saved-image-container") ||
+          imgs[i].closest('button, [role="button"], [aria-label]') ||
+          imgs[i]
+        );
+      }
+    }
+    return null;
+  }
+
+  function openNativePhotoGallery(done) {
     setComposerTakeover(false);
     setTimeout(function () {
-      var m = qs(SEL.addMedia);
-      if (m) m.click();
-      setTimeout(function () {
-        if (isChatThreadOpen()) setComposerTakeover(true);
-      }, 600);
-    }, 50);
+      // Already open?
+      if (getSavedPhotoContainers().length) {
+        done(true);
+        return;
+      }
+      var media = getAddMediaControl();
+      if (media) {
+        try {
+          media.click();
+        } catch (e) {}
+      }
+      waitUntil(
+        function () {
+          return getSavedPhotoContainers().length > 0;
+        },
+        function (ok) {
+          done(!!ok);
+        },
+        45
+      );
+    }, 60);
+  }
+
+  function clickNativePhotoSend() {
+    var btn =
+      qs("#chat-input-send-text-or-saved-photo") ||
+      getNativeSendButton() ||
+      qs('[data-testid="sendButton"]');
+    if (!btn) return false;
+    var host = btn.closest("button, [role='button']") || btn;
+    if (host.disabled || host.getAttribute("aria-disabled") === "true") return false;
+    try {
+      host.click();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function finishSendPics(sent) {
+    sendingPics = false;
+    setComposerTakeover(isChatThreadOpen() || isProfileChatPath());
+    if (resolveViewState() === "CHAT") {
+      try {
+        renderComposer("CHAT");
+      } catch (e) {}
+    }
+    if (sent > 0) showToast("Sent " + sent + " photo" + (sent === 1 ? "" : "s"), "success");
+    else showToast("Couldn't send photos — open chat & try again", "error");
+  }
+
+  /** Send up to 6 of the user's saved chat photos into the open thread. */
+  function sendSavedPhotosToChat(count) {
+    count = count || SEND_PICS_COUNT;
+    if (sendingPics) {
+      showToast("Already sending photos…", "error");
+      return;
+    }
+    if (!isChatThreadOpen() && !isProfileChatPath()) {
+      showToast("Open a chat first", "error");
+      return;
+    }
+
+    sendingPics = true;
+    showToast("Sending " + count + " photos…", "success");
+
+    openNativePhotoGallery(function (opened) {
+      if (!opened) {
+        finishSendPics(0);
+        return;
+      }
+      var srcs = collectSavedPhotoSrcs(count);
+      if (!srcs.length) {
+        finishSendPics(0);
+        return;
+      }
+
+      function sendAt(idx, sent) {
+        if (idx >= srcs.length) {
+          finishSendPics(sent);
+          return;
+        }
+
+        function pickAndSend() {
+          var container = findSavedPhotoBySrc(srcs[idx]);
+          if (!container) {
+            // Gallery may have remounted — retry open once
+            openNativePhotoGallery(function (ok2) {
+              container = findSavedPhotoBySrc(srcs[idx]);
+              if (!ok2 || !container) {
+                sendAt(idx + 1, sent);
+                return;
+              }
+              try {
+                container.click();
+              } catch (e2) {}
+              waitUntil(
+                function () {
+                  return !!qs("#chat-input-send-text-or-saved-photo, [data-testid='sendButton']");
+                },
+                function () {
+                  setTimeout(function () {
+                    if (clickNativePhotoSend()) {
+                      setTimeout(function () {
+                        sendAt(idx + 1, sent + 1);
+                      }, 700);
+                    } else {
+                      sendAt(idx + 1, sent);
+                    }
+                  }, 350);
+                },
+                30
+              );
+            });
+            return;
+          }
+          try {
+            container.click();
+          } catch (e) {}
+          waitUntil(
+            function () {
+              var b = qs("#chat-input-send-text-or-saved-photo") || getNativeSendButton();
+              return !!b;
+            },
+            function () {
+              setTimeout(function () {
+                if (clickNativePhotoSend()) {
+                  setTimeout(function () {
+                    sendAt(idx + 1, sent + 1);
+                  }, 700);
+                } else {
+                  sendAt(idx + 1, sent);
+                }
+              }, 350);
+            },
+            30
+          );
+        }
+
+        // Re-open gallery for each photo (native UI closes after send)
+        if (idx === 0 && getSavedPhotoContainers().length) {
+          pickAndSend();
+        } else {
+          openNativePhotoGallery(function (ok) {
+            if (!ok) {
+              finishSendPics(sent);
+              return;
+            }
+            pickAndSend();
+          });
+        }
+      }
+
+      sendAt(0, 0);
+    });
+  }
+
+  function cmdPics() {
+    sendSavedPhotosToChat(SEND_PICS_COUNT);
   }
 
   function ensureComposerHost() {
@@ -3403,64 +4206,148 @@
     setComposerTakeover(false);
   }
 
-  /** Compact AI marks for the shared quick row (no tall card / word chips). */
-  function appendAiChips(row, onRefresh) {
+  function styleDockChip22(chip, wide) {
+    chip.style.height = "22px";
+    chip.style.minHeight = "22px";
+    chip.style.fontSize = wide ? "11px" : "0";
+    chip.style.letterSpacing = wide ? "0" : "0.06em";
+    if (wide) {
+      chip.style.width = "auto";
+      chip.style.minWidth = "0";
+      chip.style.padding = "0 8px";
+      chip.style.borderRadius = "999px";
+    } else {
+      chip.style.width = "22px";
+      chip.style.minWidth = "22px";
+      chip.style.padding = "0";
+    }
+  }
+
+  /** Compact AI suggestion bar (same 22px height as the old dots row). */
+  function fillAiSuggestionBar(row, onRefresh) {
     var suggestions = aiSuggestionsCache.length
       ? aiSuggestionsCache
       : localAiSuggestions(getRecentChatTexts());
-    if (!suggestions.length && !aiLoading) return false;
-
-    var divider = document.createElement("div");
-    Object.assign(divider.style, {
-      width: "1px",
-      alignSelf: "stretch",
-      minHeight: "16px",
-      margin: "0 2px",
-      background: "rgba(255,255,255,0.12)",
-      flexShrink: "0"
-    });
-    row.appendChild(divider);
 
     if (aiLoading && !suggestions.length) {
-      row.appendChild(
-        makeMarkChip({
-          mark: "…",
-          label: "Loading suggestions",
-          color: THEME.accent
-        })
-      );
+      var loading = makeMarkChip({
+        mark: "…",
+        wide: true,
+        label: "Loading suggestions",
+        color: THEME.accent,
+        border: "1px solid " + THEME.aiBorder,
+        bg: THEME.aiBg
+      });
+      styleDockChip22(loading, true);
+      row.appendChild(loading);
+    } else if (!suggestions.length) {
+      var empty = document.createElement("div");
+      empty.textContent = "No suggestions";
+      Object.assign(empty.style, {
+        color: THEME.textMute,
+        fontSize: "11px",
+        lineHeight: "22px",
+        whiteSpace: "nowrap",
+        flexShrink: "0"
+      });
+      row.appendChild(empty);
     } else {
-      suggestions.slice(0, 3).forEach(function (s, i) {
+      suggestions.slice(0, MAX_AI_SUGGESTIONS).forEach(function (s) {
         var text = s.text;
-        row.appendChild(
-          makeMarkChip({
-            mark: String(i + 1),
-            label: s.label || "Suggest",
-            title: (s.label || "Suggest") + " — " + (text || ""),
-            color: THEME.accent,
-            border: "1px solid " + THEME.aiBorder,
-            bg: THEME.aiBg,
-            action: function () {
-              setComposerText(text);
-            }
-          })
-        );
+        var chip = makeMarkChip({
+          mark: s.label || "Suggest",
+          wide: true,
+          label: s.label || "Suggest",
+          title: (s.label || "Suggest") + " — " + (text || ""),
+          color: THEME.accent,
+          border: "1px solid " + THEME.aiBorder,
+          bg: THEME.aiBg,
+          action: function () {
+            setComposerText(text);
+          }
+        });
+        styleDockChip22(chip, true);
+        row.appendChild(chip);
       });
     }
 
-    row.appendChild(
-      makeMarkChip({
-        mark: "↻",
-        label: "Refresh suggestions",
-        color: THEME.accent,
-        action: function () {
-          refreshAiSuggestions(function () {
-            if (onRefresh) onRefresh();
-          });
-        }
-      })
-    );
+    var refresh = makeMarkChip({
+      mark: "↻",
+      label: "Refresh suggestions",
+      color: THEME.accent,
+      action: function () {
+        refreshAiSuggestions(function () {
+          if (onRefresh) onRefresh();
+        });
+      }
+    });
+    styleDockChip22(refresh, false);
+    refresh.style.fontSize = "12px";
+    row.appendChild(refresh);
     return true;
+  }
+
+  /** Open the user's saved-photo gallery so they can pick & send. */
+  function cmdOpenUserPhotos() {
+    if (sendingPics || nativePhotosOpen) {
+      showToast("Photos already open…", "error");
+      return;
+    }
+    if (!isChatThreadOpen() && !isProfileChatPath()) {
+      showToast("Open a chat first", "error");
+      return;
+    }
+
+    nativePhotosOpen = true;
+    openNativePhotoGallery(function (ok) {
+      if (!ok) {
+        nativePhotosOpen = false;
+        setComposerTakeover(isChatThreadOpen() || isProfileChatPath());
+        if (resolveViewState() === "CHAT") {
+          try {
+            renderComposer("CHAT");
+          } catch (e) {}
+        }
+        showToast("Couldn't open photos", "error");
+        return;
+      }
+
+      // Keep takeover off while the native gallery is visible
+      var emptyStreak = 0;
+      var tries = 0;
+      (function watch() {
+        tries++;
+        if (getSavedPhotoContainers().length) {
+          emptyStreak = 0;
+        } else {
+          emptyStreak++;
+          if (emptyStreak >= 4) {
+            nativePhotosOpen = false;
+            if (isChatThreadOpen() || isProfileChatPath()) {
+              setComposerTakeover(true);
+              if (resolveViewState() === "CHAT") {
+                try {
+                  renderComposer("CHAT");
+                } catch (e2) {}
+              }
+            }
+            return;
+          }
+        }
+        if (tries < 180) setTimeout(watch, 350);
+        else {
+          nativePhotosOpen = false;
+          if (isChatThreadOpen() || isProfileChatPath()) {
+            setComposerTakeover(true);
+            if (resolveViewState() === "CHAT") {
+              try {
+                renderComposer("CHAT");
+              } catch (e3) {}
+            }
+          }
+        }
+      })();
+    });
   }
 
   function renderComposer(state) {
@@ -3470,6 +4357,7 @@
       hideComposer();
       return;
     }
+    if (sendingPics || nativePhotosOpen) return;
 
     setComposerTakeover(true);
     var existingText = "";
@@ -3500,53 +4388,45 @@
       webkitBackdropFilter: "blur(20px) saturate(1.25)"
     });
 
-    // Marks row ABOVE the input (short) — does not sit beside the text box
-    var marks = document.createElement("div");
-    Object.assign(marks.style, {
+    // Top row: AI suggestions (scroll) + photos on the right — same 22px height as old dots
+    var topRow = document.createElement("div");
+    Object.assign(topRow.style, {
+      display: "flex",
+      alignItems: "center",
+      gap: "6px",
+      height: "22px",
+      minHeight: "22px"
+    });
+
+    var aiRow = document.createElement("div");
+    Object.assign(aiRow.style, {
       display: "flex",
       alignItems: "center",
       gap: "4px",
+      flex: "1",
+      minWidth: "0",
       height: "22px",
       overflowX: "auto",
       webkitOverflowScrolling: "touch",
       scrollbarWidth: "none"
     });
-    loadQuickMessages().forEach(function (msg, idx) {
-      var text = msg.text;
-      var label = msg.label || "Quick " + (idx + 1);
-      var chip = makeMarkChip({
-        mark: markGlyphForIndex(idx),
-        label: label,
-        title: label + " — " + (text || ""),
-        action: function () {
-          setComposerText(text);
-        }
-      });
-      chip.style.width = "22px";
-      chip.style.minWidth = "22px";
-      chip.style.height = "22px";
-      chip.style.minHeight = "22px";
-      chip.style.fontSize = "10px";
-      marks.appendChild(chip);
-    });
-    var pics = makeMarkChip({
-      icon: "photos",
-      label: "Pics",
-      title: "Pics",
-      color: THEME.gold,
-      action: cmdPics
-    });
-    pics.style.width = "22px";
-    pics.style.minWidth = "22px";
-    pics.style.height = "22px";
-    pics.style.minHeight = "22px";
-    marks.appendChild(pics);
-    if (stateData.aiEnabled && stateData.aiEndpoint) {
-      appendAiChips(marks, function () {
+    if (stateData.aiEnabled) {
+      fillAiSuggestionBar(aiRow, function () {
         renderComposer("CHAT");
       });
     }
-    el.appendChild(marks);
+    topRow.appendChild(aiRow);
+
+    var pics = makeMarkChip({
+      icon: "photos",
+      label: "Photos",
+      title: "Open your photos to send",
+      color: THEME.gold,
+      action: cmdOpenUserPhotos
+    });
+    styleDockChip22(pics, false);
+    topRow.appendChild(pics);
+    el.appendChild(topRow);
 
     // Input row: short field + larger send, same height / flat alignment
     var inputRow = document.createElement("div");
@@ -3634,12 +4514,7 @@
     setTimeout(scrollChatToLatest, 80);
     setTimeout(scrollChatToLatest, 320);
 
-    if (
-      stateData.aiEnabled &&
-      stateData.aiEndpoint &&
-      !aiSuggestionsCache.length &&
-      !aiLoading
-    ) {
+    if (stateData.aiEnabled && !aiSuggestionsCache.length && !aiLoading) {
       refreshAiSuggestions(function () {
         if (resolveViewState() === "CHAT" || isChatThreadOpen()) renderComposer("CHAT");
       });
@@ -3821,13 +4696,204 @@
         s.aiEnabled = val;
         saveState(s);
         renderBar(resolveViewState());
+        if (isChatThreadOpen()) renderComposer("CHAT");
       })
     );
     sheet.appendChild(aiRow);
 
+    function persistAiPersonalityAndRefresh(nextId, nextNotes) {
+      var s = loadState();
+      if (nextId != null) s.aiPersonality = sanitizeAiPersonality(nextId);
+      if (nextNotes != null) s.aiNotes = sanitizeAiNotes(nextNotes);
+      saveState(s);
+      aiSuggestionsCache = [];
+      refreshAiSuggestions(function () {
+        if (isChatThreadOpen()) renderComposer("CHAT");
+      });
+    }
+
+    sheet.appendChild(makeSectionLabel("AI Personality"));
+    var personHint = document.createElement("div");
+    personHint.textContent =
+      "Shapes reply suggestions for Sniffies chats — pics, host/travel, now/later, roles.";
+    Object.assign(personHint.style, {
+      color: THEME.textMute,
+      fontSize: "12px",
+      marginBottom: "10px",
+      lineHeight: "1.4"
+    });
+    sheet.appendChild(personHint);
+
+    var personRow = document.createElement("div");
+    Object.assign(personRow.style, {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: "6px",
+      marginBottom: "8px"
+    });
+    var personIds = [
+      "cruiser",
+      "direct",
+      "chill",
+      "flirty",
+      "discreet",
+      "host",
+      "custom"
+    ];
+    var blurbEl = document.createElement("div");
+    Object.assign(blurbEl.style, {
+      color: THEME.textDim,
+      fontSize: "12px",
+      marginBottom: "10px",
+      lineHeight: "1.35",
+      minHeight: "16px"
+    });
+    function paintPersonalityChips() {
+      var cur = sanitizeAiPersonality(loadState().aiPersonality);
+      personRow.innerHTML = "";
+      personIds.forEach(function (id) {
+        var meta = AI_PERSONALITIES[id];
+        var active = id === cur;
+        var chip = makeBtn(
+          meta.label,
+          function () {
+            persistAiPersonalityAndRefresh(id, null);
+            paintPersonalityChips();
+            blurbEl.textContent = meta.blurb;
+          },
+          {
+            color: active ? THEME.accent : THEME.textDim,
+            compact: true,
+            bold: active
+          }
+        );
+        chip.style.border = active
+          ? "1px solid " + THEME.aiBorder
+          : "1px solid " + THEME.border;
+        chip.style.background = active ? THEME.aiBg : THEME.chipBg;
+        chip.style.minHeight = "32px";
+        chip.style.padding = "0 10px";
+        personRow.appendChild(chip);
+      });
+      blurbEl.textContent = (AI_PERSONALITIES[cur] || AI_PERSONALITIES.cruiser).blurb;
+    }
+    paintPersonalityChips();
+    sheet.appendChild(personRow);
+    sheet.appendChild(blurbEl);
+
+    var notesLbl = document.createElement("div");
+    notesLbl.textContent = "Vibe / logistics notes";
+    Object.assign(notesLbl.style, {
+      fontSize: "13px",
+      fontWeight: "600",
+      marginBottom: "6px",
+      color: THEME.text
+    });
+    sheet.appendChild(notesLbl);
+    var notesHint = document.createElement("div");
+    notesHint.textContent =
+      "Tap chips to build your line — shown as chat suggestions locally and sent with API prompts.";
+    Object.assign(notesHint.style, {
+      color: THEME.textMute,
+      fontSize: "12px",
+      marginBottom: "8px",
+      lineHeight: "1.4"
+    });
+    sheet.appendChild(notesHint);
+
+    var notesInput = document.createElement("textarea");
+    notesInput.rows = 3;
+    notesInput.placeholder =
+      "vers top · can host · no face first · free after 10 · discreet · on PrEP…";
+    notesInput.value = st.aiNotes || "";
+    styleInput(notesInput);
+    Object.assign(notesInput.style, {
+      width: "100%",
+      minHeight: "72px",
+      resize: "vertical",
+      fontSize: "14px",
+      lineHeight: "1.35",
+      marginBottom: "10px"
+    });
+    notesInput.onchange = function () {
+      var clean = sanitizeAiNotes(notesInput.value);
+      notesInput.value = clean;
+      persistAiPersonalityAndRefresh(null, clean);
+      paintVibeChips();
+    };
+    sheet.appendChild(notesInput);
+
+    var vibeWrap = document.createElement("div");
+    vibeWrap.style.marginBottom = "12px";
+    sheet.appendChild(vibeWrap);
+
+    function paintVibeChips() {
+      var curNotes = loadState().aiNotes || "";
+      vibeWrap.innerHTML = "";
+      VIBE_LOGISTICS_CATALOG.forEach(function (block) {
+        var catLbl = document.createElement("div");
+        catLbl.textContent = block.cat;
+        Object.assign(catLbl.style, {
+          color: THEME.textMute,
+          fontSize: "11px",
+          fontWeight: "600",
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+          margin: "10px 0 6px"
+        });
+        vibeWrap.appendChild(catLbl);
+        var row = document.createElement("div");
+        Object.assign(row.style, {
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "6px"
+        });
+        block.items.forEach(function (item) {
+          var on = notesContainTag(curNotes, item.tag);
+          var chip = makeBtn(
+            item.tag,
+            function () {
+              var next = toggleVibeNoteTag(loadState().aiNotes || "", item.tag);
+              notesInput.value = next;
+              persistAiPersonalityAndRefresh(null, next);
+              paintVibeChips();
+            },
+            {
+              color: on ? THEME.accent : THEME.textDim,
+              compact: true,
+              bold: on
+            }
+          );
+          chip.title = item.reply;
+          chip.style.border = on
+            ? "1px solid " + THEME.aiBorder
+            : "1px solid " + THEME.border;
+          chip.style.background = on ? THEME.aiBg : THEME.chipBg;
+          chip.style.minHeight = "30px";
+          chip.style.padding = "0 9px";
+          chip.style.fontSize = "11px";
+          row.appendChild(chip);
+        });
+        vibeWrap.appendChild(row);
+      });
+    }
+    paintVibeChips();
+
+    var clearNotes = makeBtn(
+      "Clear notes",
+      function () {
+        notesInput.value = "";
+        persistAiPersonalityAndRefresh(null, "");
+        paintVibeChips();
+      },
+      { color: THEME.textMute, compact: true }
+    );
+    clearNotes.style.marginBottom = "12px";
+    sheet.appendChild(clearNotes);
+
     var epLabel = document.createElement("div");
     epLabel.textContent =
-      "Optional HTTPS API (POST JSON → { suggestions: [{label,text}] }). Blank = local heuristics. http:// and other schemes are rejected.";
+      "Optional HTTPS API (POST JSON → { suggestions: [{label,text}] }). Receives personality + Sniffies scene context. Blank = local personality banks.";
     Object.assign(epLabel.style, {
       color: THEME.textMute,
       fontSize: "12px",
@@ -3853,6 +4919,10 @@
       s.aiEndpoint = clean;
       saveState(s);
       epInput.value = clean;
+      aiSuggestionsCache = [];
+      refreshAiSuggestions(function () {
+        if (isChatThreadOpen()) renderComposer("CHAT");
+      });
     };
     sheet.appendChild(epInput);
 
@@ -4310,6 +5380,7 @@
           lastState = state;
           lastChat = chat;
         } else if (state === "CHAT") {
+          if (sendingPics || nativePhotosOpen) return;
           var comp = document.getElementById(COMPOSER_ID);
           if (!comp || comp.style.display === "none") renderComposer("CHAT");
           else setComposerTakeover(true);
