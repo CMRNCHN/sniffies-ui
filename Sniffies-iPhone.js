@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.2.8
+// @version      1.2.9
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.2.8";
+  var VERSION = "1.2.9";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -33,6 +33,8 @@
   var MAX_QM_TEXT = 500;
   var MAX_AI_NOTES = 600;
   var MAX_AI_SUGGESTIONS = 6;
+  var MAX_Q_ANSWER = 220;
+  var PHOTOS_STYLE_ID = "sniffies-iphone-photos-style";
   var SEND_PICS_COUNT = 6;
   var sendingPics = false;
   var nativePhotosOpen = false;
@@ -249,8 +251,128 @@
     aiEnabled: true,
     aiEndpoint: "",
     aiPersonality: "cruiser",
-    aiNotes: ""
+    aiNotes: "",
+    aiQuestionnaire: {}
   };
+
+  /**
+   * Playbook questionnaire — teaches AI how you answer common Sniffies questions
+   * and how to react when they reply a certain way.
+   */
+  var AI_QUESTIONNAIRE = [
+    {
+      id: "role",
+      section: "About you",
+      q: "Your role?",
+      type: "choice",
+      options: ["Top", "Bottom", "Vers top", "Vers bottom", "Vers", "Oral / side", "Depends"]
+    },
+    {
+      id: "hosting",
+      section: "About you",
+      q: "Hosting?",
+      type: "choice",
+      options: ["Can host", "Sometimes host", "Can't host — travel", "Carplay", "Hotel", "Depends"]
+    },
+    {
+      id: "face_pics",
+      section: "About you",
+      q: "Face pics?",
+      type: "choice",
+      options: ["Yes", "After trade", "No / blur only", "Ask first"]
+    },
+    {
+      id: "timing",
+      section: "About you",
+      q: "When are you usually free?",
+      type: "choice",
+      options: ["Now / spontaneous", "Nights", "Late night", "Weekends", "Plan ahead"]
+    },
+    {
+      id: "safer",
+      section: "About you",
+      q: "Safer-sex default?",
+      type: "choice",
+      options: ["Condoms", "On PrEP", "DDF / ask", "Negotiable", "Prefer not to say"]
+    },
+    {
+      id: "react_host_ask",
+      section: "When they ask…",
+      q: "“Host or travel?”",
+      type: "text",
+      placeholder: "e.g. I can host downtown — how far are you?"
+    },
+    {
+      id: "react_pics_ask",
+      section: "When they ask…",
+      q: "“Got pics?” / “Trade?”",
+      type: "text",
+      placeholder: "e.g. Yeah — trade? No face first."
+    },
+    {
+      id: "react_wyd",
+      section: "When they ask…",
+      q: "“Wyd?” / “Free?”",
+      type: "text",
+      placeholder: "e.g. Free now if you're close."
+    },
+    {
+      id: "react_into",
+      section: "When they ask…",
+      q: "“What are you into?”",
+      type: "text",
+      placeholder: "e.g. Vers, chill, looking for now."
+    },
+    {
+      id: "react_stats",
+      section: "When they ask…",
+      q: "Stats / age / height?",
+      type: "text",
+      placeholder: "e.g. Check my pics — or list your line."
+    },
+    {
+      id: "react_good_pics",
+      section: "When they…",
+      q: "Send pics you like",
+      type: "text",
+      placeholder: "e.g. Fuck yes — you free to come through?"
+    },
+    {
+      id: "react_bad_fit",
+      section: "When they…",
+      q: "Aren't a fit / you want out",
+      type: "text",
+      placeholder: "e.g. All good, not feeling it — take care."
+    },
+    {
+      id: "react_flake",
+      section: "When they…",
+      q: "Go quiet or flake",
+      type: "text",
+      placeholder: "e.g. Still free for a bit if you're around."
+    },
+    {
+      id: "react_pushy",
+      section: "When they…",
+      q: "Get pushy (face / meet / now)",
+      type: "text",
+      placeholder: "e.g. Slow down — I'm discreet."
+    },
+    {
+      id: "react_coming",
+      section: "When they…",
+      q: "Say they're on the way",
+      type: "text",
+      placeholder: "e.g. Bet — text when you're outside."
+    },
+    {
+      id: "dealbreakers",
+      section: "Boundaries",
+      q: "Hard no's / dealbreakers",
+      type: "text",
+      placeholder: "e.g. No drugs, no face until we meet, no rush."
+    }
+  ];
 
   var THEME = {
     bg: "rgba(12, 14, 18, 0.92)",
@@ -356,22 +478,77 @@
     return stripControls(notes).trim().slice(0, MAX_AI_NOTES);
   }
 
+  function questionnaireById(id) {
+    for (var i = 0; i < AI_QUESTIONNAIRE.length; i++) {
+      if (AI_QUESTIONNAIRE[i].id === id) return AI_QUESTIONNAIRE[i];
+    }
+    return null;
+  }
+
+  function sanitizeQuestionnaire(raw) {
+    var out = {};
+    if (!raw || typeof raw !== "object") return out;
+    for (var i = 0; i < AI_QUESTIONNAIRE.length; i++) {
+      var q = AI_QUESTIONNAIRE[i];
+      var val = raw[q.id];
+      if (val == null) continue;
+      var text = stripControls(val).trim().slice(0, MAX_Q_ANSWER);
+      if (!text) continue;
+      if (q.type === "choice" && q.options && q.options.indexOf(text) === -1) {
+        // Allow custom typed answers that aren't exact option matches
+        text = text.slice(0, MAX_Q_ANSWER);
+      }
+      out[q.id] = text;
+    }
+    return out;
+  }
+
+  function formatQuestionnairePlaybook(answers) {
+    answers = sanitizeQuestionnaire(answers);
+    var lines = [];
+    var section = "";
+    for (var i = 0; i < AI_QUESTIONNAIRE.length; i++) {
+      var q = AI_QUESTIONNAIRE[i];
+      var ans = answers[q.id];
+      if (!ans) continue;
+      if (q.section && q.section !== section) {
+        section = q.section;
+        lines.push(section + ":");
+      }
+      if (q.id.indexOf("react_") === 0) {
+        lines.push("- If they " + q.q.replace(/^[“"]|[”"]$/g, "") + " → reply like: " + ans);
+      } else {
+        lines.push("- " + q.q + " " + ans);
+      }
+    }
+    return lines.join("\n");
+  }
+
   function getAiPersonality() {
     var state = loadState();
     var id = sanitizeAiPersonality(state.aiPersonality);
     var base = AI_PERSONALITIES[id] || AI_PERSONALITIES.cruiser;
     var notes = sanitizeAiNotes(state.aiNotes);
+    var questionnaire = sanitizeQuestionnaire(state.aiQuestionnaire);
+    var playbook = formatQuestionnairePlaybook(questionnaire);
     var prompt = base.prompt;
     if (notes) {
       prompt +=
         " User notes (treat as my vibe / boundaries / logistics): " + notes;
+    }
+    if (playbook) {
+      prompt +=
+        "\n\nUser Sniffies playbook (follow closely for answers & reactions):\n" +
+        playbook;
     }
     return {
       id: base.id,
       label: base.label,
       blurb: base.blurb,
       prompt: prompt,
-      notes: notes
+      notes: notes,
+      questionnaire: questionnaire,
+      playbook: playbook
     };
   }
 
@@ -390,6 +567,7 @@
     parsed.aiNotes = sanitizeAiNotes(
       typeof parsed.aiNotes === "string" ? parsed.aiNotes : DEFAULTS.aiNotes
     );
+    parsed.aiQuestionnaire = sanitizeQuestionnaire(parsed.aiQuestionnaire);
     return parsed;
   }
 
@@ -1179,8 +1357,91 @@
 
   function setComposerTakeover(on) {
     ensureHideNativeStyle();
+    // Never park native input while the photo gallery is open
+    if (nativePhotosOpen) on = false;
     if (on) document.body.classList.add("sniffies-iphone-composer-takeover");
     else document.body.classList.remove("sniffies-iphone-composer-takeover");
+  }
+
+  function ensurePhotosModeStyle() {
+    if (document.getElementById(PHOTOS_STYLE_ID)) return;
+    var style = document.createElement("style");
+    style.id = PHOTOS_STYLE_ID;
+    style.textContent =
+      "body.sniffies-iphone-native-photos #" +
+      COMPOSER_ID +
+      "{" +
+      "  display: none !important;" +
+      "  pointer-events: none !important;" +
+      "  visibility: hidden !important;" +
+      "}" +
+      "body.sniffies-iphone-native-photos #" +
+      BAR_ID +
+      "{" +
+      "  opacity: 0.25 !important;" +
+      "  pointer-events: none !important;" +
+      "}" +
+      "body.sniffies-iphone-native-photos #" +
+      SIDEBAR_ID +
+      "{" +
+      "  display: none !important;" +
+      "}" +
+      /* Force native chat/gallery back on-screen (undo takeover park) */ +
+      "body.sniffies-iphone-native-photos [data-testid='chatInputPanel']," +
+      "body.sniffies-iphone-native-photos #chat-input-panel," +
+      "body.sniffies-iphone-native-photos app-chat-input {" +
+      "  opacity: 1 !important;" +
+      "  pointer-events: auto !important;" +
+      "  position: relative !important;" +
+      "  left: auto !important;" +
+      "  right: auto !important;" +
+      "  bottom: auto !important;" +
+      "  top: auto !important;" +
+      "  height: auto !important;" +
+      "  width: auto !important;" +
+      "  max-width: 100% !important;" +
+      "  overflow: visible !important;" +
+      "  transform: none !important;" +
+      "  z-index: 1000025 !important;" +
+      "  margin-bottom: calc(var(--sniffies-iphone-bar-h, 52px) + 12px) !important;" +
+      "}" +
+      "body.sniffies-iphone-native-photos .saved-image-container," +
+      "body.sniffies-iphone-native-photos [class*='saved-image']," +
+      "body.sniffies-iphone-native-photos [class*='photo-gallery']," +
+      "body.sniffies-iphone-native-photos [class*='photoGallery']," +
+      "body.sniffies-iphone-native-photos [aria-label*='Select This Photo'] {" +
+      "  pointer-events: auto !important;" +
+      "  opacity: 1 !important;" +
+      "  visibility: visible !important;" +
+      "}";
+    document.head.appendChild(style);
+  }
+
+  function isNativePhotoGalleryOpen() {
+    if (getSavedPhotoContainers().length) return true;
+    var nodes = qsa(
+      "[class*='photo-gallery'], [class*='photoGallery'], [class*='saved-image'], [aria-label*='Select This Photo'], [aria-label*='photo gallery' i]"
+    );
+    for (var i = 0; i < nodes.length; i++) {
+      if (isOurUi(nodes[i])) continue;
+      if (isVisible(nodes[i]) || isOnScreen(nodes[i], 24)) return true;
+    }
+    return false;
+  }
+
+  function setNativePhotosMode(on) {
+    ensurePhotosModeStyle();
+    nativePhotosOpen = !!on;
+    if (on) {
+      document.body.classList.add("sniffies-iphone-native-photos");
+      setComposerTakeover(false);
+      hideComposer();
+      try {
+        updateContentInset();
+      } catch (e) {}
+    } else {
+      document.body.classList.remove("sniffies-iphone-native-photos");
+    }
   }
 
   function getActiveChatFingerprint() {
@@ -1693,6 +1954,51 @@
     return sanitizeAiNotes(next.join(" · "));
   }
 
+  /** Prefer questionnaire reaction lines when their last message matches. */
+  function questionnaireSuggestions(lastMessage) {
+    var answers = sanitizeQuestionnaire(loadState().aiQuestionnaire);
+    var last = String(lastMessage || "").toLowerCase();
+    var out = [];
+    var rules = [
+      { re: /host|travel|place|come through|come thru|address|how far/i, id: "react_host_ask", label: "Host?" },
+      { re: /pic|photo|trade|face|snap|nudes?/i, id: "react_pics_ask", label: "Pics" },
+      { re: /wyd|free|now|tonight|available|meet|up to/i, id: "react_wyd", label: "Free?" },
+      { re: /into|looking|want|down for|role/i, id: "react_into", label: "Into" },
+      { re: /age|height|weight|stats|hung|cut|uncut/i, id: "react_stats", label: "Stats" },
+      { re: /on (my )?way|outside|here|eta|leaving/i, id: "react_coming", label: "ETA" },
+      { re: /come on|hurry|now or never|send face|prove/i, id: "react_pushy", label: "Pushy" }
+    ];
+    for (var i = 0; i < rules.length; i++) {
+      if (!last || !rules[i].re.test(last)) continue;
+      var ans = answers[rules[i].id];
+      if (!ans) continue;
+      out.push({ label: rules[i].label, text: ans });
+    }
+    // Always surface filled "about you" lines as soft suggestions when opening
+    var aboutIds = ["role", "hosting", "face_pics", "timing", "safer", "dealbreakers"];
+    for (var a = 0; a < aboutIds.length; a++) {
+      var q = questionnaireById(aboutIds[a]);
+      var val = answers[aboutIds[a]];
+      if (!q || !val) continue;
+      if (!last || aboutIds[a] === "dealbreakers") {
+        out.push({
+          label: (q.q || aboutIds[a]).replace(/\?$/, "").slice(0, 14),
+          text: val
+        });
+      }
+    }
+    // Reactions that aren't tied to last msg still useful as fillers if filled
+    ["react_good_pics", "react_bad_fit", "react_flake"].forEach(function (id) {
+      if (!answers[id]) return;
+      var meta = questionnaireById(id);
+      out.push({
+        label: (meta && meta.q ? meta.q : id).slice(0, 14),
+        text: answers[id]
+      });
+    });
+    return out;
+  }
+
   function localAiSuggestions(recent) {
     var personality = getAiPersonality();
     var bank = sniffiesReplyBank(personality.id);
@@ -1708,10 +2014,13 @@
       });
     }
 
-    // 1) User vibe/logistics notes (expanded to chat-ready lines)
+    // 1) Questionnaire playbook reactions (highest priority)
+    questionnaireSuggestions(last).forEach(add);
+
+    // 2) User vibe/logistics notes (expanded to chat-ready lines)
     notesAsSuggestionLines(personality.notes).forEach(add);
 
-    // 2) Context vibe/logistics from catalog
+    // 3) Context vibe/logistics from catalog
     contextVibeSuggestions(last).forEach(add);
 
     if (!last) {
@@ -1771,14 +2080,17 @@
           prompt: personality.prompt,
           notes: personality.notes
         },
+        questionnaire: personality.questionnaire || {},
+        playbook: personality.playbook || "",
         vibeTags: parseNotesVibeTags(personality.notes),
         vibeLines: notesAsSuggestionLines(personality.notes),
         logistics: contextVibeSuggestions(recent[recent.length - 1] || "").slice(0, 12),
         instructions:
           "Return 4-6 short reply suggestions as JSON { suggestions: [{ label, text }] }. " +
           "Replies must fit Sniffies gay cruising / map-hookup chat: brief, chatty, logistics-aware. " +
+          "Prefer questionnaire playbook answers for matching situations (host/travel, pics, free now, into, pushy, flake). " +
           "Prefer the user's vibeTags / vibeLines (role, host/travel, pics rules, timing, boundaries). " +
-          "Match the personality prompt and notes."
+          "Match the personality prompt, notes, and playbook."
       })
     })
       .then(function (r) {
@@ -4010,10 +4322,10 @@
   }
 
   function openNativePhotoGallery(done) {
-    setComposerTakeover(false);
+    setNativePhotosMode(true);
     setTimeout(function () {
       // Already open?
-      if (getSavedPhotoContainers().length) {
+      if (isNativePhotoGalleryOpen()) {
         done(true);
         return;
       }
@@ -4025,14 +4337,14 @@
       }
       waitUntil(
         function () {
-          return getSavedPhotoContainers().length > 0;
+          return isNativePhotoGalleryOpen();
         },
         function (ok) {
           done(!!ok);
         },
-        45
+        50
       );
-    }, 60);
+    }, 80);
   }
 
   function clickNativePhotoSend() {
@@ -4053,6 +4365,7 @@
 
   function finishSendPics(sent) {
     sendingPics = false;
+    setNativePhotosMode(false);
     setComposerTakeover(isChatThreadOpen() || isProfileChatPath());
     if (resolveViewState() === "CHAT") {
       try {
@@ -4287,6 +4600,18 @@
     return true;
   }
 
+  function restoreComposerAfterPhotos() {
+    setNativePhotosMode(false);
+    if (isChatThreadOpen() || isProfileChatPath()) {
+      setComposerTakeover(true);
+      if (resolveViewState() === "CHAT") {
+        try {
+          renderComposer("CHAT");
+        } catch (e) {}
+      }
+    }
+  }
+
   /** Open the user's saved-photo gallery so they can pick & send. */
   function cmdOpenUserPhotos() {
     if (sendingPics || nativePhotosOpen) {
@@ -4298,54 +4623,30 @@
       return;
     }
 
-    nativePhotosOpen = true;
     openNativePhotoGallery(function (ok) {
       if (!ok) {
-        nativePhotosOpen = false;
-        setComposerTakeover(isChatThreadOpen() || isProfileChatPath());
-        if (resolveViewState() === "CHAT") {
-          try {
-            renderComposer("CHAT");
-          } catch (e) {}
-        }
+        restoreComposerAfterPhotos();
         showToast("Couldn't open photos", "error");
         return;
       }
 
-      // Keep takeover off while the native gallery is visible
+      // Keep our dock out of the way until the native gallery closes
       var emptyStreak = 0;
       var tries = 0;
       (function watch() {
         tries++;
-        if (getSavedPhotoContainers().length) {
+        if (isNativePhotoGalleryOpen()) {
           emptyStreak = 0;
+          setNativePhotosMode(true);
         } else {
           emptyStreak++;
-          if (emptyStreak >= 4) {
-            nativePhotosOpen = false;
-            if (isChatThreadOpen() || isProfileChatPath()) {
-              setComposerTakeover(true);
-              if (resolveViewState() === "CHAT") {
-                try {
-                  renderComposer("CHAT");
-                } catch (e2) {}
-              }
-            }
+          if (emptyStreak >= 5) {
+            restoreComposerAfterPhotos();
             return;
           }
         }
-        if (tries < 180) setTimeout(watch, 350);
-        else {
-          nativePhotosOpen = false;
-          if (isChatThreadOpen() || isProfileChatPath()) {
-            setComposerTakeover(true);
-            if (resolveViewState() === "CHAT") {
-              try {
-                renderComposer("CHAT");
-              } catch (e3) {}
-            }
-          }
-        }
+        if (tries < 200) setTimeout(watch, 300);
+        else restoreComposerAfterPhotos();
       })();
     });
   }
@@ -4357,7 +4658,12 @@
       hideComposer();
       return;
     }
-    if (sendingPics || nativePhotosOpen) return;
+    if (nativePhotosOpen) {
+      hideComposer();
+      setComposerTakeover(false);
+      return;
+    }
+    if (sendingPics) return;
 
     setComposerTakeover(true);
     var existingText = "";
@@ -4891,9 +5197,129 @@
     clearNotes.style.marginBottom = "12px";
     sheet.appendChild(clearNotes);
 
+    sheet.appendChild(makeSectionLabel("AI Questionnaire"));
+    var qHint = document.createElement("div");
+    qHint.textContent =
+      "Fill this so suggestions know how you answer common Sniffies questions and how to react.";
+    Object.assign(qHint.style, {
+      color: THEME.textMute,
+      fontSize: "12px",
+      marginBottom: "10px",
+      lineHeight: "1.4"
+    });
+    sheet.appendChild(qHint);
+
+    var qAnswers = sanitizeQuestionnaire(st.aiQuestionnaire);
+    var qSection = "";
+    function persistQuestionnaire() {
+      var s = loadState();
+      s.aiQuestionnaire = sanitizeQuestionnaire(qAnswers);
+      saveState(s);
+      aiSuggestionsCache = [];
+      refreshAiSuggestions(function () {
+        if (isChatThreadOpen()) renderComposer("CHAT");
+      });
+    }
+
+    AI_QUESTIONNAIRE.forEach(function (item) {
+      if (item.section && item.section !== qSection) {
+        qSection = item.section;
+        var sec = document.createElement("div");
+        sec.textContent = qSection;
+        Object.assign(sec.style, {
+          color: THEME.accent,
+          fontSize: "12px",
+          fontWeight: "700",
+          letterSpacing: "0.04em",
+          margin: "14px 0 8px"
+        });
+        sheet.appendChild(sec);
+      }
+
+      var qLab = document.createElement("div");
+      qLab.textContent = item.q;
+      Object.assign(qLab.style, {
+        fontSize: "13px",
+        fontWeight: "600",
+        marginBottom: "6px",
+        color: THEME.text
+      });
+      sheet.appendChild(qLab);
+
+      if (item.type === "choice") {
+        var choiceRow = document.createElement("div");
+        Object.assign(choiceRow.style, {
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "6px",
+          marginBottom: "10px"
+        });
+        (item.options || []).forEach(function (opt) {
+          var on = qAnswers[item.id] === opt;
+          var chip = makeBtn(
+            opt,
+            function () {
+              if (qAnswers[item.id] === opt) delete qAnswers[item.id];
+              else qAnswers[item.id] = opt;
+              persistQuestionnaire();
+              renderSettingsModal();
+            },
+            {
+              color: on ? THEME.accent : THEME.textDim,
+              compact: true,
+              bold: on
+            }
+          );
+          chip.style.border = on
+            ? "1px solid " + THEME.aiBorder
+            : "1px solid " + THEME.border;
+          chip.style.background = on ? THEME.aiBg : THEME.chipBg;
+          chip.style.minHeight = "30px";
+          chip.style.padding = "0 9px";
+          chip.style.fontSize = "11px";
+          choiceRow.appendChild(chip);
+        });
+        sheet.appendChild(choiceRow);
+      } else {
+        var taQ = document.createElement("textarea");
+        taQ.rows = 2;
+        taQ.placeholder = item.placeholder || "Your usual reply…";
+        taQ.value = qAnswers[item.id] || "";
+        styleInput(taQ);
+        Object.assign(taQ.style, {
+          width: "100%",
+          minHeight: "52px",
+          resize: "vertical",
+          fontSize: "14px",
+          lineHeight: "1.35",
+          marginBottom: "10px"
+        });
+        taQ.onchange = function () {
+          var clean = stripControls(taQ.value).trim().slice(0, MAX_Q_ANSWER);
+          taQ.value = clean;
+          if (clean) qAnswers[item.id] = clean;
+          else delete qAnswers[item.id];
+          persistQuestionnaire();
+        };
+        sheet.appendChild(taQ);
+      }
+    });
+
+    var clearQ = makeBtn(
+      "Clear questionnaire",
+      function () {
+        qAnswers = {};
+        persistQuestionnaire();
+        renderSettingsModal();
+      },
+      { color: THEME.textMute, compact: true }
+    );
+    clearQ.style.marginBottom = "14px";
+    sheet.appendChild(clearQ);
+
     var epLabel = document.createElement("div");
     epLabel.textContent =
-      "Optional HTTPS API (POST JSON → { suggestions: [{label,text}] }). Receives personality + Sniffies scene context. Blank = local personality banks.";
+      "Optional HTTPS API (POST JSON → { suggestions: [{label,text}] }). Receives personality + questionnaire playbook + Sniffies scene context. Blank = local banks."
     Object.assign(epLabel.style, {
       color: THEME.textMute,
       fontSize: "12px",
