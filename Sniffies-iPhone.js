@@ -2664,6 +2664,13 @@
         photos: !!classified.photos,
         message: !!classified.message
       },
+      messageHunt: {
+        nearPin: !!findMessageNearPinControls(),
+        native: !!findNativeMessageControl(),
+        chatPath: isProfileChatPath(),
+        profileId: profileIdFromDom(),
+        hasChatInput: !!qs(SEL.chatInputPanel) || !!qs(SEL.chatTextArea)
+      },
       items: rail.map(function (item, idx) {
         var r = item.el.getBoundingClientRect();
         return {
