@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Sniffies Intent Bar (iPhone)
 // @namespace    http://tampermonkey.net/
-// @version      1.3.0
+// @version      1.3.1
 // @description  Floating bar + profile sidebar for Tampermonkey on iOS (no Split View)
 // @author       You
 // @match        https://sniffies.com/*
@@ -20,7 +20,7 @@
   if (window.__sniffiesIntentBarIPhone) return;
   window.__sniffiesIntentBarIPhone = true;
 
-  var VERSION = "1.3.0";
+  var VERSION = "1.3.1";
   var STORAGE_KEY = "sniffies-intent-bar-iphone-v1";
   // Migrate quick messages from desktop keys when iPhone storage is empty
   var DESKTOP_MIGRATE_KEYS = [
@@ -35,6 +35,7 @@
   var MAX_AI_SUGGESTIONS = 6;
   var MAX_Q_ANSWER = 220;
   var PHOTOS_STYLE_ID = "sniffies-iphone-photos-style";
+  var SAFE_STYLE_ID = "sniffies-iphone-safe-area";
   var SEND_PICS_COUNT = 6;
   var sendingPics = false;
   var nativePhotosOpen = false;
@@ -1116,7 +1117,7 @@
       toast.id = TOAST_ID;
       Object.assign(toast.style, {
         position: "fixed",
-        bottom: "calc(96px + env(safe-area-inset-bottom, 0px))",
+        bottom: "calc(var(--sniffies-iphone-dock-h, 96px) + 12px)",
         left: "50%",
         transform: "translateX(-50%) translateY(8px)",
         background:
@@ -1217,7 +1218,90 @@
     document.head.appendChild(style);
   }
 
+  /** Make env(safe-area-inset-*) resolve on iOS Safari (notch / home indicator). */
+  function ensureViewportFitCover() {
+    try {
+      var meta = document.querySelector('meta[name="viewport"]');
+      if (!meta) {
+        meta = document.createElement("meta");
+        meta.setAttribute("name", "viewport");
+        meta.setAttribute(
+          "content",
+          "width=device-width, initial-scale=1, viewport-fit=cover"
+        );
+        document.head.appendChild(meta);
+        return;
+      }
+      var content = meta.getAttribute("content") || "";
+      if (!/viewport-fit\s*=\s*cover/i.test(content)) {
+        meta.setAttribute(
+          "content",
+          content.replace(/\s*$/, "") + (content ? ", " : "") + "viewport-fit=cover"
+        );
+      }
+    } catch (e) {}
+  }
+
+  /**
+   * Pin our dock to the hardware safe area.
+   * Bar sits on bottom:0 with inset padding; composer stacks above measured bar height
+   * (do NOT force composer bottom:0 — that would cover the nav bar).
+   */
+  function ensureSafeAreaStyle() {
+    ensureViewportFitCover();
+    if (document.getElementById(SAFE_STYLE_ID)) return;
+    var style = document.createElement("style");
+    style.id = SAFE_STYLE_ID;
+    style.textContent =
+      ":root {" +
+      "  --sniffies-safe-bottom: env(safe-area-inset-bottom, 0px);" +
+      "  --sniffies-safe-top: env(safe-area-inset-top, 0px);" +
+      "}" +
+      "#" +
+      BAR_ID +
+      "{" +
+      "  position: fixed !important;" +
+      "  left: 0 !important;" +
+      "  right: 0 !important;" +
+      "  bottom: 0 !important;" +
+      "  margin-bottom: 0 !important;" +
+      "  padding-bottom: calc(6px + var(--sniffies-safe-bottom)) !important;" +
+      "  box-sizing: border-box !important;" +
+      "}" +
+      "#" +
+      COMPOSER_ID +
+      "[data-dock='1'] {" +
+      "  position: fixed !important;" +
+      "  left: 0 !important;" +
+      "  right: 0 !important;" +
+      "  bottom: var(--sniffies-iphone-bar-h, 52px) !important;" +
+      "  margin-bottom: 0 !important;" +
+      "  box-sizing: border-box !important;" +
+      "}" +
+      "#" +
+      TOAST_ID +
+      "{" +
+      "  bottom: calc(var(--sniffies-iphone-dock-h, 96px) + 12px) !important;" +
+      "}" +
+      "#" +
+      SETTINGS_ID +
+      "," +
+      "#" +
+      DETAILS_ID +
+      "{" +
+      "  padding-bottom: var(--sniffies-safe-bottom) !important;" +
+      "  box-sizing: border-box !important;" +
+      "}" +
+      "#" +
+      SIDEBAR_ID +
+      "{" +
+      "  top: calc(12px + var(--sniffies-safe-top)) !important;" +
+      "}";
+    document.head.appendChild(style);
+  }
+
   function ensureInsetStyle() {
+    ensureSafeAreaStyle();
     if (document.getElementById(INSET_STYLE_ID)) return;
     var style = document.createElement("style");
     style.id = INSET_STYLE_ID;
@@ -1342,6 +1426,7 @@
 
   function updateContentInset() {
     ensureInsetStyle();
+    ensureSafeAreaStyle();
     document.documentElement.classList.add("sniffies-iphone-has-bar");
     var m = measureDockHeight();
     var inset = m.dockH + 12;
@@ -5836,12 +5921,13 @@
       alignItems: "center",
       justifyContent: "space-around",
       gap: "0",
-      padding: "6px 8px calc(6px + env(safe-area-inset-bottom, 0px))",
+      padding: "6px 8px calc(6px + var(--sniffies-safe-bottom, env(safe-area-inset-bottom, 0px)))",
       boxShadow: "0 -10px 32px rgba(0,0,0,0.45)",
       backdropFilter: "blur(20px) saturate(1.25)",
       webkitBackdropFilter: "blur(20px) saturate(1.25)",
       pointerEvents: "auto"
     });
+    ensureSafeAreaStyle();
 
     // Full-width short bar: Back · Star · Chat · Map · Settings
     bar.appendChild(makeFloatingNavBtn("back"));
@@ -5954,6 +6040,7 @@
   }
 
   function boot() {
+    ensureSafeAreaStyle();
     var lastState = null;
     var lastChat = null;
     var scheduled = false;
